@@ -80,6 +80,15 @@ public partial class App : Application
             return;
         }
 
+        // headless check of the login-autostart round trip, using the real registry code path
+        if (System.Array.Exists(e.Args, a => a == "--autostart-check"))
+        {
+            Headless = true;
+            AutostartCheck();
+            Current?.Shutdown();
+            return;
+        }
+
         Shell = new MainWindow
         {
             ShowActivated = !minimized,
@@ -127,6 +136,37 @@ public partial class App : Application
         w.Close();
         Shutdown();
     }
+
+    /// <summary>
+    /// Exercises the real HKCU\...\Run round trip and puts the registry back exactly as it was,
+    /// so "自启动是否完善" is a measured answer instead of a code-reading guess.
+    /// </summary>
+    static void AutostartCheck()
+    {
+        string before = Autostart.CurrentCommand();
+        Say("登录前状态: " + (before == null ? "未注册自启" : "已注册: " + before));
+        Say("本程序路径: " + Autostart.ExePath + (System.IO.File.Exists(Autostart.ExePath) ? " (存在)" : " (不存在！自启会失败)"));
+
+        Autostart.Enable(writeAtLogon: true, minimized: true);
+        string after = Autostart.CurrentCommand();
+        Say("Enable 之后: " + after);
+        Say("  IsEnabled = " + Autostart.IsEnabled);
+        Say("  含 --minimized = " + (after?.Contains("--minimized") ?? false));
+        Say("  含 --write = " + (after?.Contains("--write") ?? false));
+        Say("  指向自身 = " + (after?.Contains(Autostart.ExePath) ?? false));
+
+        Autostart.Disable();
+        Say("Disable 之后: " + (Autostart.CurrentCommand() ?? "已移除 (OK)"));
+
+        Autostart.WriteRaw(before);                       // restore whatever the user had
+        string restored = Autostart.CurrentCommand();
+        Say("还原: " + (restored == before ? "与测试前一致 (OK)" : "*** 不一致 *** 现在 = " + restored));
+
+        var legacy = Autostart.LegacyWriterShortcut();
+        Say("官方 writer.exe 开机快捷方式: " + (legacy is null ? "无" : legacy.Value.path + " 参数 " + legacy.Value.args));
+    }
+
+    static void Say(object line) => System.Console.WriteLine(line);
 
     void DumpUi(string outPng, string[] args)
     {

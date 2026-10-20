@@ -291,7 +291,8 @@ internal static class Program
             foreach (var d in back.Devices)
                 Console.WriteLine($"     id='{d.Id}' name='{d.Name}' profile='{d.Profile}' dpi={d.Config.Dpi} disable={d.Config.Disable}");
 
-            bool idsOk = back.Devices.Select(d => d.Id).SequenceEqual(mice.Select(m => m.Id));
+            // settings.json already carries its own device entries, so compare only the tail we added
+            bool idsOk = back.Devices.TakeLast(mice.Count).Select(d => d.Id).SequenceEqual(mice.Select(m => m.Id));
             Console.WriteLine("   ids survive the binary round trip: " + idsOk);
 
             // what the driver would actually compare against (BusQueryDeviceID style, upper case)

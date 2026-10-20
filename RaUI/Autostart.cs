@@ -42,6 +42,17 @@ public static class Autostart
         k?.DeleteValue(ValueName, false);
     }
 
+    /// <summary>
+    /// Put back a command string captured with CurrentCommand() - used by --autostart-check so a
+    /// test round trip can never leave the user's login entry changed.
+    /// </summary>
+    public static void WriteRaw(string? command)
+    {
+        if (string.IsNullOrEmpty(command)) { Disable(); return; }
+        using var k = Registry.CurrentUser.CreateSubKey(RunKey);
+        k.SetValue(ValueName, command);
+    }
+
     /// <summary>Reports the legacy official writer.exe Startup shortcut, if the user still has it.</summary>
     public static (bool exists, string path, string args)? LegacyWriterShortcut()
     {

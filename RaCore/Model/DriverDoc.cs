@@ -476,6 +476,10 @@ public static class Json
             var d = r.Devices[i];
             var tag = $"device[{i}]“{d.Name}”";
             if (string.IsNullOrWhiteSpace(d.Id)) bad.Add($"{tag} 没有设备 id");
+            // the wire field is WCHAR[200]; WriteWz truncates silently, and two ids that share their
+            // first 199 characters would become the same device inside the driver
+            if (d.Id.Length >= device_settings.MAX_DEV_ID_LEN)
+                bad.Add($"{tag} 的设备 id 有 {d.Id.Length} 字符，超过驱动字段上限 {device_settings.MAX_DEV_ID_LEN - 1}，写进驱动会被截断");
             if (!r.Profiles.Any(p => p.Name == d.Profile)) bad.Add($"{tag} 引用了不存在的 profile “{d.Profile}”");
             if (d.Config.Dpi < 0 || d.Config.Dpi > 64000) bad.Add($"{tag} DPI={d.Config.Dpi} 不合理");
             if (d.Config.PollingRate < 0 || d.Config.PollingRate > 16000) bad.Add($"{tag} 轮询率={d.Config.PollingRate} 不合理");

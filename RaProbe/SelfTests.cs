@@ -56,6 +56,9 @@ public static class SelfTests
         Console.WriteLine("\n== J. Simulated flicks: metrics must recover the injected truth ==");
         Section("simulator", SimulatorChecks);
 
+        Console.WriteLine("\n== K. Device entries through the driver blob and settings.json ==");
+        Section("devices", DeviceWire);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -460,6 +463,55 @@ public static class SelfTests
         var withRoom = TargetLayout.Place(900, 500, 3440, 1440, 420, 26, 1, seed: 7, avoid: new[] { blocker });
         Check(withRoom.Count == 1 && Math.Abs(Math.Sqrt(Math.Pow(withRoom[0].X - 900, 2) + Math.Pow(withRoom[0].Y - 500, 2)) - 420) < 1,
             "a respawn still keeps the configured distance from the click point");
+    }
+
+    // ---------- K ----------
+
+    static void DeviceWire()
+    {
+        var doc = BaseDoc();
+        doc.Profiles.Add(new ProfileDto { Name = "sniper" });
+        doc.Devices.Add(new DeviceDto
+        {
+            Id = @"HID\VID_258A&PID_0049&MI_01&COL07", Name = "主鼠", Profile = "default",
+            Config = new DeviceConfigDto { Dpi = 800, PollingRate = 2000 },
+        });
+        doc.Devices.Add(new DeviceDto
+        {
+            Id = @"HID\VID_046D&PID_C08B", Name = "mouse B", Profile = "sniper",
+            Config = new DeviceConfigDto { Dpi = 1600, Disable = true },
+        });
+
+        Check(Json.Validate(doc).Count == 0, "a two-device, two-profile document passes validation");
+
+        var blob = Convert4.BuildBlob(doc);
+        int expect = WireSizes.IoBase + doc.Profiles.Count * WireSizes.Modifier + doc.Devices.Count * WireSizes.Device;
+        Check(blob.Length == expect, $"blob = io_base + {doc.Profiles.Count} modifier + {doc.Devices.Count} device = {expect} bytes (got {blob.Length})");
+
+        var back = Convert4.ReadBlob(blob);
+        Check(back.Devices.Count == 2, "both device entries come back out of the blob");
+        Check(back.Devices.Select(d => d.Id).SequenceEqual(doc.Devices.Select(d => d.Id)),
+            "device ids survive the binary round trip byte for byte, in order");
+        Check(back.Devices[0].Name == "主鼠", "a non-ASCII device name survives (the wire field is UTF-16)");
+        Check(back.Devices[1].Profile == "sniper", "the per-device profile binding survives");
+        Check(back.Devices[0].Config.Dpi == 800 && back.Devices[1].Config.Dpi == 1600, "per-device DPI survives");
+        Check(back.Devices[1].Config.Disable && !back.Devices[0].Config.Disable, "the per-device disable flag survives");
+        Check(back.Devices[0].Config.PollingRate == 2000, "the per-device polling rate survives");
+
+        var viaJson = Json.Deserialize(Json.Serialize(doc));
+        Check(viaJson.Devices.Count == 2 && viaJson.Devices[1].Profile == "sniper",
+            "the same document also survives our settings.json round trip (official-file compatibility)");
+
+        // the wire id field is WCHAR[200] and WriteWz truncates without complaining: two ids that
+        // share their first 199 characters would become one device inside the driver, so the
+        // validator has to refuse it AND the truncation must be the documented behaviour
+        var longId = BaseDoc();
+        longId.Devices.Add(new DeviceDto { Id = new string('X', device_settings.MAX_DEV_ID_LEN), Name = "long", Profile = "default" });
+        Check(Json.Validate(longId).Any(p => p.Contains("截断")),
+            "an id the driver field would cut down is refused before it can silently collide");
+        var cut = Convert4.ReadBlob(Convert4.BuildBlob(longId)).Devices.First(d => d.Name == "long");
+        Check(cut.Id.Length == device_settings.MAX_DEV_ID_LEN - 1,
+            $"and the wire really does cut it at {device_settings.MAX_DEV_ID_LEN - 1} chars (got {cut.Id.Length})");
     }
 
     // ---------- J ----------
