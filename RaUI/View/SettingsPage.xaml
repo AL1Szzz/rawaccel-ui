@@ -1,0 +1,75 @@
+<UserControl x:Class="RaUI.View.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="4,0,8,0" MaxWidth="720" HorizontalAlignment="Left">
+            <TextBlock Text="设置" Style="{StaticResource TitleTextStyle}"/>
+            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,14"
+                       Text="这些开关只影响这个程序，不会改动 rawaccel.sys 本身。"/>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="驱动与文件" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock x:Name="TxtDriver" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock x:Name="TxtPath" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock x:Name="TxtLegacy" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource WarningBrush}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="全屏测试分辨率" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="ChkCustomMode" Content="测试时切换到指定分辨率（结束后自动还原）" Click="OnCustomMode"/>
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                            <TextBlock Text="分辨率" FontSize="12" Foreground="{StaticResource TextTertiaryBrush}" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="CmbRes" Height="30" SelectionChanged="OnRes"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                            <TextBlock Text="刷新率" FontSize="12" Foreground="{StaticResource TextTertiaryBrush}" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="CmbHz" Height="30" SelectionChanged="OnHz"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock x:Name="ModeWarn" Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="列表来自系统实际报告的显示模式；不熟悉的分辨率建议先用“不改分辨率”跑一次。"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="开机与后台" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <CheckBox x:Name="ChkAutostart" Content="登录时自动启动本程序" Click="OnAutostartChanged"/>
+                    </StackPanel>
+                    <CheckBox x:Name="ChkWriteOnStart" Content="启动时自动把设置写入驱动（等于官方 writer.exe 的作用）" Margin="0,0,0,8" Click="OnWriteOnStartChanged"/>
+                    <TextBlock Style="{StaticResource SubtleTextStyle}" TextWrapping="Wrap"
+                               Text="驱动不保存设置：开机后如果不写入，鼠标就是原始输入（不加速）。"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="危险操作" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="BtnDisable" Content="清空驱动（立刻取消所有加速）" Click="OnDisable"/>
+                        <Button x:Name="BtnRestore" Content="恢复上一次文件" Click="OnRestore" Margin="10,0,0,0"/>
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="清空只影响本次开机；重启后驱动仍是空的。设置文件不会被改动，随时可以重新写入。"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="关于" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}"
+                               Text="前端为本项目自研；后端沿用官方签名驱动 rawaccel.sys，算法与曲线来自 common/accel-*.hpp 的直接移植，并已用驱动内存逐字节校验。"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
