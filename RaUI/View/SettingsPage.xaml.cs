@@ -29,6 +29,13 @@ public partial class SettingsPage : UserControl
         ChkWriteOnStart.IsChecked = cmd.Contains("--write");
         ChkWriteOnStart.IsEnabled = Autostart.IsEnabled;
 
+        ChkTray.IsChecked = AppState.Prefs.TrayEnabled;
+        ChkCloseTray.IsChecked = AppState.Prefs.CloseToTray;
+        ChkStartHidden.IsChecked = AppState.Prefs.StartHidden;
+        TxtTrayState.Text = "托盘状态：" + (App.Tray == null
+            ? (AppState.Prefs.TrayEnabled ? "还没建起来（下次启动时生效）" : "已关闭，窗口即程序，× 会退出")
+            : (App.Tray.LastError is { Length: > 0 } te ? "失败 - " + te : "图标在位，左键切换窗口，右键出菜单"));
+
         FillModes();
     }
 
@@ -70,10 +77,20 @@ public partial class SettingsPage : UserControl
     void UpdateWarn()
     {
         var pr = AppState.Prefs;
-        ModeWarn.Text = pr.UseCustomFullscreenMode
-            ? $"测试将切到 {pr.FullscreenWidth}×{pr.FullscreenHeight}" +
-              (pr.FullscreenRefresh > 0 ? $" @ {pr.FullscreenRefresh}Hz" : "") + "，关闭测试窗口后自动还原；还原失败会在本轮日志里写出来。"
-            : "测试保持当前桌面分辨率，只开无边框全屏。";
+        if (!pr.UseCustomFullscreenMode)
+        {
+            ModeWarn.Text = "测试保持当前桌面分辨率，只开无边框全屏。";
+            return;
+        }
+        // the stored refresh can come from another monitor or an older driver: say so here instead
+        // of promising a mode the system will refuse (the test window already falls back and warns)
+        bool offered = RaCore.Display.AvailableModes().Any(m => m.Width == pr.FullscreenWidth && m.Height == pr.FullscreenHeight &&
+                                                              (pr.FullscreenRefresh == 0 || m.Refresh == pr.FullscreenRefresh));
+        string want = $"{pr.FullscreenWidth}×{pr.FullscreenHeight}" +
+                      (pr.FullscreenRefresh > 0 ? $" @ {pr.FullscreenRefresh}Hz" : "");
+        ModeWarn.Text = offered
+            ? $"测试将切到 {want}，关闭测试窗口后自动还原；还原失败会在本轮日志里写出来。"
+            : $"系统当前没有提供 {want} 这个模式：测试会用当前分辨率跑（窗口里也会写明）。";
     }
 
     void FillHz()
@@ -108,6 +125,31 @@ public partial class SettingsPage : UserControl
     void OnCustomMode(object sender, RoutedEventArgs e) => SaveModes();
     void OnRes(object sender, SelectionChangedEventArgs e) { if (CmbRes.SelectedItem != null) FillHz(); SaveModes(); }
     void OnHz(object sender, SelectionChangedEventArgs e) => SaveModes();
+
+    void OnTrayChanged(object sender, RoutedEventArgs e)
+    {
+        var pr = AppState.Prefs;
+        pr.TrayEnabled = ChkTray.IsChecked == true;
+        pr.CloseToTray = ChkCloseTray.IsChecked == true;
+        pr.StartHidden = ChkStartHidden.IsChecked == true;
+        AppState.SavePrefs();
+
+        // apply without a restart: turning it off must remove the icon, turning it on must add one
+        if (pr.TrayEnabled && App.Tray == null)
+        {
+            App.Tray = new TrayIcon(App.Shell, App.State);
+            if (App.Tray.LastError is { Length: > 0 } err) App.State.Status = err;
+        }
+        else if (!pr.TrayEnabled && App.Tray != null)
+        {
+            App.Tray.Dispose();
+            App.Tray = null;
+        }
+        App.State.Status = pr.TrayEnabled
+            ? "托盘已开启：× 只是收起来，右键图标 → 退出 才结束程序"
+            : "托盘已关闭：现在关掉窗口就是退出程序";
+        Refresh();
+    }
 
     void OnAutostartChanged(object sender, RoutedEventArgs e)
     {

@@ -8,9 +8,23 @@ public partial class App : Application
 {
     public static AppState State { get; private set; }
     public static MainWindow Shell { get; private set; }
+    public static TrayIcon Tray { get; set; }
+
+    /// <summary>Only the tray menu / 退出 sets this; closing the window is otherwise "hide to tray".</summary>
+    public static bool IsExiting { get; private set; }
 
     /// <summary>Headless render check: do not register raw input or start the telemetry timer.</summary>
     public static bool Headless { get; private set; }
+
+    public static void ExitApplication()
+    {
+        IsExiting = true;
+        Tray?.SetVisible(false);
+        Tray?.Dispose();
+        Tray = null;
+        Shell?.Close();
+        Current?.Shutdown();
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -57,11 +71,61 @@ public partial class App : Application
             return;
         }
 
-        Shell = new MainWindow();
-        if (minimized) Shell.WindowState = WindowState.Minimized;
+        // headless check of the tray plumbing: build the HICON, add the icon, report, remove it.
+        // This is the only way to verify the notify-icon path without touching the taskbar by hand.
+        if (System.Array.Exists(e.Args, a => a == "--dump-tray"))
+        {
+            Headless = true;
+            DumpTray();
+            return;
+        }
+
+        Shell = new MainWindow
+        {
+            ShowActivated = !minimized,
+            WindowState = minimized ? WindowState.Minimized : WindowState.Normal,
+        };
         Shell.Show();
 
+        if (AppState.Prefs.TrayEnabled)
+        {
+            Tray = new TrayIcon(Shell, State);
+            if (Tray.LastError is { Length: > 0 } err) State.Status = err;
+            if (minimized && AppState.Prefs.StartHidden) Shell.Hide();
+        }
+        else if (minimized) State.Status = "以最小化启动（托盘图标已关闭，关掉窗口就退出）";
+
         if (writeOnStart) _ = State.WriteToDriverAsync();
+    }
+
+    void DumpTray()
+    {
+        var w = new MainWindow
+        {
+            ShowActivated = false,
+            // WS_EX_TOOLWINDOW (ShowInTaskbar=false) is NOT how the app really runs, and the shell
+            // is pickier about windows it did not see being created normally - mirror production
+            Left = -20000,
+            Top = -20000,
+            Width = 800,
+            Height = 600,
+        };
+        w.Show();
+        w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+
+        var tray = new TrayIcon(w, State);
+        string icon = tray.ArtPath;
+        bool ok = tray.LastError.Length == 0;
+        System.Console.WriteLine($"tray add: {(ok ? "Shell_NotifyIcon accepted" : "FAILED - " + tray.LastError)}");
+        System.Console.WriteLine($"tray tip: {tray.TipText}");
+        System.Console.WriteLine($"tray art: {icon}");
+
+        // give the shell a moment to paint it, then take the icon back down
+        w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+        System.Threading.Thread.Sleep(400);
+        tray.Dispose();
+        w.Close();
+        Shutdown();
     }
 
     void DumpUi(string outPng, string[] args)

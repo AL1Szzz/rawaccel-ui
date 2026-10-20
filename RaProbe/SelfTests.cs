@@ -53,6 +53,9 @@ public static class SelfTests
         Console.WriteLine("\n== I. Open loop: the endpoint of the FIRST movement ==");
         Section("openloop", OpenLoopChecks);
 
+        Console.WriteLine("\n== J. Simulated flicks: metrics must recover the injected truth ==");
+        Section("simulator", SimulatorChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -457,6 +460,74 @@ public static class SelfTests
         var withRoom = TargetLayout.Place(900, 500, 3440, 1440, 420, 26, 1, seed: 7, avoid: new[] { blocker });
         Check(withRoom.Count == 1 && Math.Abs(Math.Sqrt(Math.Pow(withRoom[0].X - 900, 2) + Math.Pow(withRoom[0].Y - 500, 2)) - 420) < 1,
             "a respawn still keeps the configured distance from the click point");
+    }
+
+    // ---------- J ----------
+
+    static void SimulatorChecks()
+    {
+        const double dist = 700;
+
+        // 1) a clean flick that lands on the first movement
+        var a = Simulator.Flick1(dist, 6.0, 1.00, seed: 11, emptyWindowRate: 0.18);
+        var pa = OpenLoop.Analyze(a.Path, 0, 0, dist, 0, dist, 0, a.StartMs, a.Path[^1].timeMs, 26);
+        Check(pa != null, "clean flick reconstructed");
+        if (pa == null) return;
+        double truthA = a.TrueMaxExtentPx / dist * 100.0;
+        Check(Math.Abs(pa.Value.MaxExtentPct - truthA) < 3 && !pa.Value.Overshot,
+            $"clean flick: max_extent {pa.Value.MaxExtentPct:0.0}% against injected {truthA:0.0}%, overshot={pa.Value.Overshot}");
+        Check(!pa.Value.Corrected, $"clean flick needs no second submovement (corrected={pa.Value.Corrected})");
+        Check(Math.Abs(pa.Value.RadialPct) < 3,
+            $"and the first impulse is measured on the target ({pa.Value.RadialPct:0.0}%, truth 0)");
+        Check(!double.IsNaN(pa.Value.TimeToTargetMs) && Math.Abs(pa.Value.TimeToTargetMs - a.TrueReachMs) < 6,
+            $"entry time {pa.Value.TimeToTargetMs:0}ms against injected {a.TrueReachMs:0}ms");
+        Check(a.Path.Count(s => s.dx == 0) > 3, $"the injected series really does contain coalesced windows ({a.Path.Count(s => s.dx == 0)} of {a.Path.Count})");
+
+        // 2) a flick that flies 15% past the target and is pulled back
+        var b = Simulator.Flick1(dist, 6.0, 1.15, seed: 22, emptyWindowRate: 0.18);
+        var pb = OpenLoop.Analyze(b.Path, 0, 0, dist, 0, dist, 0, b.StartMs, b.Path[^1].timeMs, 26);
+        double truthB = b.TrueMaxExtentPx / dist * 100.0;
+        Check(pb != null && Math.Abs(pb.Value.MaxExtentPct - truthB) < 3 && pb.Value.Overshot,
+            $"overshooting flick: max_extent {pb?.MaxExtentPct:0.0}% against injected {truthB:0.0}%, overshot={pb?.Overshot}");
+        Check(pb != null && pb.Value.Corrected, "and it is counted as corrected (it had to come back)");
+        double primB = (b.TruePrimaryExtentPx - dist) / dist * 100.0;
+        Check(pb != null && pb.Value.RadialPct > primB - 4 && pb.Value.RadialPct <= primB + 1,
+            $"the impulse is measured flying past ({pb?.RadialPct:0.0}% against injected {primB:0.0}%)");
+
+        // 3) a flick that stops at 76% and creeps in - the case the old code truncated wrongly
+        var c = Simulator.Flick1(dist, 6.0, 0.76, seed: 33, emptyWindowRate: 0.18);
+        var pc = OpenLoop.Analyze(c.Path, 0, 0, dist, 0, dist, 0, c.StartMs, c.Path[^1].timeMs, 26);
+        double truthC = c.TrueMaxExtentPx / dist * 100.0;
+        Check(pc != null && Math.Abs(pc.Value.MaxExtentPct - truthC) < 3,
+            $"short-then-creep flick: max_extent {pc?.MaxExtentPct:0.0}% against injected {truthC:0.0}%");
+        Check(pc != null && pc.Value.Corrected, "the creep is counted as a second submovement");
+        double primC = (c.TruePrimaryExtentPx - dist) / dist * 100.0;
+        Check(pc != null && Math.Abs(pc.Value.RadialPct - primC) < 4,
+            $"and the segmentation view still reports the first impulse short ({pc?.RadialPct:0.0}% against injected {primC:0.0}%)");
+
+        // 4) a whole simulated round through the real statistics + guard
+        var round = Simulator.Round(40, dist, 6.0, 1.0, seed: 77);
+        var st = RoundStats.Compute(round, 26, dist);
+        Check(st.PrimaryCount == round.Count, $"every simulated flick was reconstructed ({st.PrimaryCount}/{round.Count})");
+        Check(st.HitExtentMedian >= 95 && !st.Quality.Any(q => q.Contains("losing pointer travel")),
+            $"the travel guard stays quiet on clean data (hits reached {st.HitExtentMedian:0}%)");
+        Check(st.MaxExtentMedian > 96 && st.MaxExtentMedian < 106,
+            $"round-level max_extent median {st.MaxExtentMedian:0.0}%");
+        Check(st.TimeToTargetMedian > 20 && st.TimeToTargetMedian < 1200,
+            $"round-level entry time median {st.TimeToTargetMedian:0}ms");
+        Check(st.Count == 40 && st.BallsCleared >= 30, $"simulated round scored {st.BallsCleared}/{st.Count} clicks");
+
+        // 5) the metric that the whole tuning protocol rests on must be blind to nothing:
+        //    a systematically-overshooting round has to show it, a clean one must not
+        var hot = Simulator.Round(40, dist, 6.0, 1.12, seed: 91);
+        var sh = RoundStats.Compute(hot, 26, dist);
+        Check(sh.MaxExtentMedian > st.MaxExtentMedian + 5,
+            $"a round that flies past reads {sh.MaxExtentMedian:0.0}% vs {st.MaxExtentMedian:0.0}% for a neutral one");
+        Check(sh.OvershootCount2 > st.OvershootCount2,
+            $"and the overshoot count separates them ({sh.OvershootCount2} vs {st.OvershootCount2})");
+        Check(Math.Abs(sh.RadialMedian - st.RadialMedian) < 1,
+            "closed-loop accuracy is blind to it: both rounds click on the ball because he corrects, " +
+            $"radial median {st.RadialMedian:0.0}% vs {sh.RadialMedian:0.0}%");
     }
 
     // ---------- I ----------

@@ -50,6 +50,12 @@ public sealed class UiPrefs
     [JsonPropertyName("fullscreenHeight")] public int FullscreenHeight { get; set; }
     [JsonPropertyName("fullscreenRefresh")] public int FullscreenRefresh { get; set; }
 
+    /// <summary>常驻托盘：图标存在时关窗口不等于退出。</summary>
+    [JsonPropertyName("trayEnabled")] public bool TrayEnabled { get; set; } = true;
+    [JsonPropertyName("closeToTray")] public bool CloseToTray { get; set; } = true;
+    /// <summary>Only used for an --minimized (autostart) launch: start without a window at all.</summary>
+    [JsonPropertyName("startHidden")] public bool StartHidden { get; set; } = true;
+
     static readonly JsonSerializerOptions Opts = new() { WriteIndented = true };
 
     /// <summary>Shared across builds so a new release keeps the same prefs and log history.</summary>
