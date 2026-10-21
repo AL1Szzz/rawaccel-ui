@@ -62,6 +62,9 @@ public static class SelfTests
         Console.WriteLine("\n== L. History groups, noise verdicts, archive round trip ==");
         Section("history", HistoryChecks);
 
+        Console.WriteLine("\n== M. Poll jitter: is the packet stream regular, and what does it cost in gain ==");
+        Section("jitter", JitterChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -1101,5 +1104,72 @@ public static class SelfTests
             $"the one-bucket note is present in Chinese: {string.Join(" | ", st.Notes.Select(n => n.Zh))}");
         Check(st.Notes.Any(n => n.Zh.Contains("8 次点击")),
             "numbers are interpolated into the Chinese text, not just the English one");
+    }
+
+    // ---------- M ----------
+
+    static void JitterChecks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "raui-jitter-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var file = Path.Combine(dir, "settings.json");
+            File.WriteAllText(file, Json.Serialize(BaseDoc()));       // the same X curve the user runs
+
+            List<PollJitter.Pkt> Rhythm(double[] gapsUs)
+            {
+                var l = new List<PollJitter.Pkt>();
+                long t = 0;
+                foreach (var g in gapsUs) { t += (long)g; l.Add(new PollJitter.Pkt(t, 4, 0)); }
+                return l;
+            }
+            double[] Gaps(int every, double lateUs) =>
+                Enumerable.Range(0, 400).Select(i => i % every == 0 ? lateUs : 500.0).ToArray();
+
+            var perfect = PollJitter.Measure(Rhythm(Enumerable.Repeat(500.0, 400).ToArray()), file);
+            Check(perfect != null, "a 400 packet rhythm is measurable");
+            if (perfect == null) return;
+            Check(Math.Abs(perfect.Hz - 2000) < 1, $"a 500us rhythm reads as 2000Hz ({perfect.Hz:0} Hz)");
+            Check(perfect.Slow15 == 0 && perfect.Slow20 == 0 && perfect.Slow50 == 0,
+                "nothing is late in a perfect stream");
+            Check(perfect.Gain.All(g => Math.Abs(g.LossPct) < 1e-9),
+                "and a perfect stream costs exactly no gain at any speed");
+
+            var g4 = perfect.Gain.First(g => g.Speed == 4);
+            var g8 = perfect.Gain.First(g => g.Speed == 8);
+            var g16 = perfect.Gain.First(g => g.Speed == 16);
+            Check(g4.Ideal > 1 && g8.Ideal > g4.Ideal,
+                $"the curve is applied through the real model: 4 c/ms -> {g4.Ideal:0.000}x, 8 c/ms -> {g8.Ideal:0.000}x");
+            // Anchor on what must be exactly true, not on a remembered number: below the X offset
+            // of 3 counts/ms the curve does nothing at all. (Note this out/in is the per-packet
+            // multiplier; the graph's "peak gain 1.97x" is dOut/dIn, a different quantity.)
+            var g2 = perfect.Gain.First(g => g.Speed == 2);
+            Check(Math.Abs(g2.Ideal - 1.0) < 1e-9 && Math.Abs(g2.LossPct) < 1e-9,
+                $"below the X offset the curve is exactly inert: 2 c/ms -> {g2.Ideal:0.000}x");
+            Check(perfect.Gain.All(g => g.Ideal >= 1.0), "and no speed is ever demoted below 1.0x");
+            Check(g16.Ideal > g8.Ideal && g8.Ideal > 1.05,
+                $"the multiplier keeps growing through the flick range: 8 -> {g8.Ideal:0.000}x, 16 -> {g16.Ideal:0.000}x");
+
+            var late = PollJitter.Measure(Rhythm(Gaps(5, 1500)), file);
+            Check(late != null && Math.Abs(late!.MedUs - 500) < 1,
+                $"the median ignores the 3x late minority ({late?.MedUs:0}us stays at the true rate)");
+            Check(late != null && late.Slow20 > 15 && late.Slow20 < 25,
+                $"20% of packets are flagged as late ({late?.Slow20:0.0}%)");
+            var l8 = late!.Gain.First(g => g.Speed == 8);
+            Check(l8.Avg < l8.Ideal && l8.LossPct < -0.5,
+                $"late packets really do cost gain at 8 c/ms: {l8.Ideal:0.000}x -> {l8.Avg:0.000}x ({l8.LossPct:+0.0;-0.0}%)");
+
+            double LossAt(int every) =>
+                PollJitter.Measure(Rhythm(Gaps(every, 1500)), file)!.Gain.First(g => g.Speed == 8).LossPct;
+            var sparse = LossAt(10); var thick = LossAt(4);
+            Check(sparse < 0 && thick < sparse,
+                $"the loss scales with how many packets are late: 10% late {sparse:0.0}%, 25% late {thick:0.0}%");
+
+            Check(PollJitter.Measure(Rhythm(Enumerable.Repeat(500.0, 10).ToArray()), file) == null,
+                "a stream too short to say anything is refused instead of guessed");
+        }
+        catch (Exception e) { Check(false, "unexpected exception in the jitter test: " + e.Message); }
+        finally { try { Directory.Delete(dir, true); } catch { } }
     }
 }

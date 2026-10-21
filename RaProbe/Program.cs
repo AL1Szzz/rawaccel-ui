@@ -31,6 +31,12 @@ internal static class Program
             return;
         }
 
+        if (args.Contains("--poll-jitter"))
+        {
+            Environment.Exit(PollJitter.Run(args));
+            return;
+        }
+
         if (args.Contains("--apply-settings"))
         {
             Environment.Exit(ApplySettings.Run(args));
