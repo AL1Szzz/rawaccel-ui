@@ -19,7 +19,17 @@ public sealed class CurveSeries
     public List<CurvePoint> Points { get; init; } = new();
 }
 
-public enum CurveKind { Sensitivity, Gain, OutputVelocity }
+public enum CurveKind { Sensitivity, Gain }
+
+/// <summary>A vertical reference line that says what it is: an unlabeled dashed line is noise.</summary>
+public sealed record ChartMarker(double At, string Label, Brush Color);
+
+/// <summary>
+/// A stretch of the hand-speed axis where the curve behaves the same way, with the share of the
+/// user's actual recent movements that landed in it. That share is the number that answers
+/// "does the acceleration ever engage for me" - the curve shape alone cannot.
+/// </summary>
+public sealed record ChartZone(double From, double To, string Name, double Share, Brush Tint);
 
 /// <summary>App state: one document, the driver, and the derived curves.</summary>
 public sealed class AppState : INotifyPropertyChanged
@@ -121,7 +131,8 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     public List<CurvePoint> Histogram { get; private set; } = new();
-    public List<double> Markers { get; private set; } = new();
+    public List<ChartMarker> Markers { get; private set; } = new();
+    public List<ChartZone> Zones { get; private set; } = new();
     public string Telemetry { get; private set; } = "未开始采样";
 
     public void AttachMonitor(Window w)
@@ -134,9 +145,11 @@ public sealed class AppState : INotifyPropertyChanged
             timer.Tick += (_, _) =>
             {
                 // only rebuild when something actually changed; a 120ms full re-evaluation of
-                // the curve starves the input queue and contaminates the very timings we record
+                // the curve starves the input queue and contaminates the very timings we record.
+                // Poll the monotonic window counter, not Count: the ring buffer pins at Capacity
+                // after ~2 min of movement and then looks frozen while samples keep arriving.
                 var hash = ConfigHash.OfDoc(doc);
-                if (hash != lastCurveHash || (Speeds?.Count ?? 0) != lastSampleCount)
+                if (hash != lastCurveHash || (Speeds?.Windows ?? 0) != lastSampleWindows)
                 {
                     RebuildCurves();
                     Raise(nameof(Telemetry));
@@ -152,7 +165,7 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     string lastCurveHash = "";
-    int lastSampleCount = -1;
+    long lastSampleWindows = -1;
 
     /// <summary>UI preferences (display scaling, game sens). Never written to the driver.</summary>
     public static UiPrefs Prefs { get; private set; } = UiPrefs.Load();
@@ -700,7 +713,7 @@ public sealed class AppState : INotifyPropertyChanged
     public void RebuildCurves()
     {
         var p = selected;
-        if (p == null) { Series = new(); Histogram = new(); Markers = new(); Raise(nameof(Series)); return; }
+        if (p == null) { Series = new(); Histogram = new(); Markers = new(); Zones = new(); Raise(nameof(Series)); return; }
 
         double time = 1.0;   // 1 ms: feeding speed*time gives counts/ms directly
         var ms = new ModifierSettings(Convert4.ToStruct(p));
@@ -721,7 +734,6 @@ public sealed class AppState : INotifyPropertyChanged
 
         var sens = new List<CurvePoint>();
         var gain = new List<CurvePoint>();
-        var vel = new List<CurvePoint>();
 
         for (int i = 1; i <= n; i++)
         {
@@ -731,53 +743,56 @@ public sealed class AppState : INotifyPropertyChanged
             double h = v * 1e-3 + 1e-6;
             double g = (OutSpeedAtInternal(v + h, true) - OutSpeedAtInternal(Math.Max(v - h, 0), true)) / (2 * h);
 
-            vel.Add(new CurvePoint(axis, InternalToAxis(o)));
             sens.Add(new CurvePoint(axis, o / Math.Max(v, 1e-9)));
             gain.Add(new CurvePoint(axis, g));
         }
 
         string unit = ChartDpi > 0 ? $"in/s @ {ChartDpi:0} DPI" : "counts/ms";
-        XAxisLabel = $"输入速度 ({unit})";
-        YAxisLabel = CurveKind switch
-        {
-            CurveKind.Sensitivity => "灵敏度 (输出/输入)",
-            CurveKind.Gain => "增益 (d输出/d输入)",
-            _ => "输出速度",
-        };
+        XAxisLabel = $"手速 ({unit})";
+        YAxisLabel = CurveKind == CurveKind.Gain ? "增益 (d输出/d输入)" : "灵敏度 (输出/输入)";
 
-        Brush accent = Brush("Accent"), grey = Brush("TextTertiary");
-        Series = CurveKind switch
-        {
-            CurveKind.Sensitivity => new() { new() { Name = "灵敏度", Brush = accent, Points = sens } },
-            CurveKind.Gain => new List<CurveSeries> { new() { Name = "增益", Brush = accent, Points = gain } },
-            _ => new()
-            {
-                new() { Name = "输出速度", Brush = accent, Points = vel },
-                new() { Name = "输入速度 (y=x)", Brush = grey, Dashed = true, Thickness = 1,
-                        Points = Enumerable.Range(1, n).Select(i => new CurvePoint(maxAxis * i / n, maxAxis * i / n)).ToList() },
-            },
-        };
+        Brush accent = Brush("AccentBrush");
+        Series = CurveKind == CurveKind.Gain
+            ? new List<CurveSeries> { new() { Name = "增益", Brush = accent, Points = gain } }
+            : new List<CurveSeries> { new() { Name = "灵敏度", Brush = accent, Points = sens } };
 
-        // markers: where acceleration starts and where it stops rising, per axis
-        Markers = new List<double>();
-        foreach (bool horiz in new[] { true, false })
+        // Labelled markers. An unlabelled dashed line is just noise on the chart, which is what
+        // the four yellow lines used to be. X and Y get different colours so 起/顶 can be traced
+        // back to the axis they belong to.
+        var axX = Analyze(p, true);
+        var axY = Analyze(p, false);
+        var xCol = Brush("AccentBrush");
+        var yCol = YMarkerBrush;
+        Markers = new List<ChartMarker>();
+        void AddMark(double internalV, string label, Brush col)
         {
-            var a = Analyze(p, horiz);
-            if (a.threshold > 0) Markers.Add(InternalToAxis(a.threshold));
-            if (!double.IsInfinity(a.capSpeed) && a.capSpeed > 0) Markers.Add(InternalToAxis(a.capSpeed));
+            if (internalV <= 0 || double.IsInfinity(internalV)) return;
+            double axis = InternalToAxis(internalV);
+            if (axis is > 0 and < 400) Markers.Add(new ChartMarker(axis, label, col));
         }
+        AddMark(axX.threshold, "X起", xCol);
+        AddMark(axX.capSpeed, "X顶", xCol);
+        AddMark(axY.threshold, "Y起", yCol);
+        AddMark(axY.capSpeed, "Y顶", yCol);
 
-        // live hand-speed histogram, in the same axis units
+        // The plotted curve is the X curve, so the bands are X bands: below the X threshold the
+        // multiplier is exactly 1.0 however hard he moves, above the X cap it stops rising.
+        double zLo = axX.threshold > 0 && !double.IsInfinity(axX.threshold) ? InternalToAxis(axX.threshold) : double.NaN;
+        double zHi = axX.capSpeed > 0 && !double.IsInfinity(axX.capSpeed) ? InternalToAxis(axX.capSpeed) : double.NaN;
+
+        // live hand-speed histogram, in the same axis units, plus how much of it lands in each band
         Histogram = new List<CurvePoint>();
+        double flat = double.NaN, capped = double.NaN;
         var rec = Speeds;
         if (rec != null && ShowSamples)
         {
             const int bins = 64;
             var counts = new int[bins];
-            foreach (var s in rec.Snapshot())
+            // SpeedX, not max(X,Y): the curve on this chart is the X curve, so the share numbers
+            // have to be measured on the same axis or they would quietly disagree with the line.
+            var speeds = rec.Snapshot().Select(s => InternalToAxis(byComponent ? s.SpeedX : s.SpeedWhole)).ToList();
+            foreach (var axis in speeds)
             {
-                double vInternal = byComponent ? Math.Max(s.SpeedX, s.SpeedY) : s.SpeedWhole;
-                double axis = InternalToAxis(vInternal);
                 if (axis <= 0 || axis > maxAxis) continue;
                 counts[Math.Min((int)(axis / maxAxis * bins), bins - 1)]++;
             }
@@ -785,14 +800,35 @@ public sealed class AppState : INotifyPropertyChanged
             if (peak > 0)
                 for (int i = 0; i < bins; i++)
                     if (counts[i] > 0) Histogram.Add(new CurvePoint(maxAxis * (i + 0.5) / bins, (double)counts[i] / peak));
+
+            int seen = speeds.Count(v => v > 0 && v <= maxAxis);
+            if (seen > 0)
+            {
+                flat = 100.0 * speeds.Count(v => v > 0 && v < zLo) / seen;
+                capped = double.IsNaN(zHi) ? 0 : 100.0 * speeds.Count(v => v >= zHi && v <= maxAxis) / seen;
+            }
+        }
+
+        // The bands belong to the curve, not to the samples: they are drawn even before he moves,
+        // only the percentages need data. Hiding the bands until then would hide the main point.
+        Zones = new List<ChartZone>();
+        if (!double.IsNaN(zLo))
+        {
+            double top = double.IsNaN(zHi) ? maxAxis : zHi;
+            Zones.Add(new ChartZone(0, zLo, "不加速", flat, ZoneTint(0x1E)));
+            Zones.Add(new ChartZone(zLo, top, "加速中", double.IsNaN(flat) ? double.NaN : Math.Max(0, 100 - flat - capped),
+                                    ZoneTint(0x30)));
+            if (!double.IsNaN(zHi)) Zones.Add(new ChartZone(zHi, maxAxis, "已封顶", capped, ZoneTint(0x42)));
         }
 
         Telemetry = DescribeSpeeds();
         lastCurveHash = ConfigHash.OfDoc(doc);
-        lastSampleCount = Speeds?.Count ?? 0;
+        lastSampleWindows = Speeds?.Windows ?? 0;
 
         Raise(nameof(Series));
         Raise(nameof(Histogram));
+        Raise(nameof(Zones));
+        Raise(nameof(Markers));
         Raise(nameof(Markers));
         Raise(nameof(XAxisLabel));
         Raise(nameof(YAxisLabel));
@@ -802,4 +838,14 @@ public sealed class AppState : INotifyPropertyChanged
 
     static SolidColorBrush Brush(string key) =>
         (System.Windows.Application.Current?.TryFindResource(key) as SolidColorBrush) ?? Brushes.DeepSkyBlue;
+
+    /// <summary>Y gets its own colour because the chart plots the X curve; a Y line in the same
+    /// accent blue would read as "this is the curve's own threshold".</summary>
+    static readonly SolidColorBrush YMarkerBrush = Frozen(Color.FromRgb(0xFF, 0xC2, 0x4D));
+
+    static SolidColorBrush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
+    /// <summary>Zone shading: the same hue at three depths, so the eye reads "more accelerated"
+    /// left to right without needing a legend.</summary>
+    static SolidColorBrush ZoneTint(byte alpha) => Frozen(Color.FromArgb(alpha, 0x4C, 0xC2, 0xFF));
 }

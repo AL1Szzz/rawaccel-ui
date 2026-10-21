@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Media;
+using RaUI;
 
 namespace RaUI.Controls;
 
@@ -43,14 +44,24 @@ public sealed class CurveChart : FrameworkElement
         set => SetValue(HistogramProperty, value);
     }
 
-    /// <summary>Vertical reference lines (acceleration starts / caps).</summary>
+    /// <summary>Vertical reference lines, each with the text that says what it is.</summary>
     public static readonly DependencyProperty MarkersProperty = DependencyProperty.Register(
-        nameof(Markers), typeof(IEnumerable<double>), typeof(CurveChart),
+        nameof(Markers), typeof(IEnumerable<ChartMarker>), typeof(CurveChart),
         new PropertyMetadata(null, (o, e) => ((CurveChart)o).InvalidateVisual()));
-    public IEnumerable<double> Markers
+    public IEnumerable<ChartMarker> Markers
     {
-        get => (IEnumerable<double>)GetValue(MarkersProperty);
+        get => (IEnumerable<ChartMarker>)GetValue(MarkersProperty);
         set => SetValue(MarkersProperty, value);
+    }
+
+    /// <summary>Hand-speed bands (不加速 / 加速中 / 已封顶) with the share of real movement in each.</summary>
+    public static readonly DependencyProperty ZonesProperty = DependencyProperty.Register(
+        nameof(Zones), typeof(IEnumerable<ChartZone>), typeof(CurveChart),
+        new PropertyMetadata(null, (o, e) => ((CurveChart)o).InvalidateVisual()));
+    public IEnumerable<ChartZone> Zones
+    {
+        get => (IEnumerable<ChartZone>)GetValue(ZonesProperty);
+        set => SetValue(ZonesProperty, value);
     }
 
     Brush Grid = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
@@ -106,6 +117,17 @@ public sealed class CurveChart : FrameworkElement
             plot.X + plot.Width * (x / maxX),
             plot.Bottom - plot.Height * ((y - minY) / (maxY - minY)));
 
+        // Zone bands first, so everything else draws on top of them. The point of the shading is
+        // that "where does my hand actually live" can be answered without reading a single number.
+        var zones = Zones?.ToList() ?? new();
+        foreach (var z in zones)
+        {
+            if (!double.IsFinite(z.From) || !double.IsFinite(z.To) || z.To <= z.From) continue;
+            double x0 = plot.X + plot.Width * Math.Clamp(z.From / maxX, 0, 1);
+            double x1 = plot.X + plot.Width * Math.Clamp(z.To / maxX, 0, 1);
+            dc.DrawRectangle(z.Tint, null, new Rect(x0, plot.Top, Math.Max(0, x1 - x0), plot.Height));
+        }
+
         // grid + ticks
         var pen = new Pen(Grid, 1); pen.Freeze();
         var axisPen = new Pen(Axis, 1); axisPen.Freeze();
@@ -154,15 +176,37 @@ public sealed class CurveChart : FrameworkElement
             }
         }
 
-        // acceleration start / cap markers
-        var mkPen = new Pen(new SolidColorBrush(Color.FromArgb(0x88, 0xFC, 0xE1, 0x00)), 1)
-        { DashStyle = new DashStyle(new double[] { 2, 3 }, 0) };
-        mkPen.Freeze();
-        foreach (var m in Markers ?? Enumerable.Empty<double>())
+        // Acceleration start / cap lines, each labelled. Four identical unlabelled dashes read as
+        // noise; the whole reason these exist is to say "the curve does nothing left of here".
+        double lastPx = double.MinValue;
+        int stagger = 0;
+        foreach (var m in (Markers ?? Enumerable.Empty<ChartMarker>()).Where(m => double.IsFinite(m.At) && m.At > 0)
+                                              .OrderBy(m => m.At))
         {
-            if (!double.IsFinite(m) || m <= 0 || m > maxX) continue;
-            double x = plot.X + plot.Width * (m / maxX);
+            if (m.At > maxX) continue;
+            double x = plot.X + plot.Width * (m.At / maxX);
+            var mkPen = new Pen(m.Color, 1) { DashStyle = new DashStyle(new double[] { 2, 3 }, 0) };
+            mkPen.Freeze();
             dc.DrawLine(mkPen, new Point(x, plot.Top + 2), new Point(x, plot.Bottom - 2));
+            // labels collide as soon as two thresholds sit close together: push the next one down.
+            // Measured in pixels - axis units would change meaning with the DPI box.
+            stagger = x - lastPx < 34 ? (stagger + 1) % 3 : 0;
+            lastPx = x;
+            DrawLabel(dc, m.Label, face, 10, m.Color, x, plot.Top + 3 + stagger * 13, dpi, true);
+        }
+
+        // The share of real hand movement in each band, printed inside the band itself: this is the
+        // line that answers "does the acceleration ever engage for me".
+        foreach (var z in zones)
+        {
+            if (!double.IsFinite(z.From) || !double.IsFinite(z.To)) continue;
+            double x0 = plot.X + plot.Width * Math.Clamp(z.From / maxX, 0, 1);
+            double x1 = plot.X + plot.Width * Math.Clamp(z.To / maxX, 0, 1);
+            if (x1 - x0 < 52) continue;                       // no room: the band itself says enough
+            // the bands belong to the curve, the percentages to the samples - before he has moved
+            // there is nothing to claim, so the name stands alone rather than showing "NaN%"
+            string cap = double.IsNaN(z.Share) || z.Share <= 0 ? z.Name : $"{z.Name} {z.Share:0}%";
+            DrawLabel(dc, cap, face, 10.5, Text, (x0 + x1) / 2, plot.Bottom - 18, dpi, true);
         }
 
         foreach (var s in series)

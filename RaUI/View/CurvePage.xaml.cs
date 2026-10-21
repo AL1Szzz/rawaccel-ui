@@ -40,6 +40,8 @@ public partial class CurvePage : UserControl
             new System.Windows.Data.Binding(nameof(AppState.Histogram)) { Source = App.State });
         Chart.SetBinding(Controls.CurveChart.MarkersProperty,
             new System.Windows.Data.Binding(nameof(AppState.Markers)) { Source = App.State });
+        Chart.SetBinding(Controls.CurveChart.ZonesProperty,
+            new System.Windows.Data.Binding(nameof(AppState.Zones)) { Source = App.State });
         Chart.SetBinding(Controls.CurveChart.XLabelProperty,
             new System.Windows.Data.Binding(nameof(AppState.XAxisLabel)) { Source = App.State });
         Chart.SetBinding(Controls.CurveChart.YLabelProperty,
@@ -328,14 +330,9 @@ public partial class CurvePage : UserControl
         var p = App.State.SelectedProfile;
         if (p == null) { ChartNote.Text = ""; PhysicsNote.Text = ""; return; }
 
-        var ax = App.State.Analyze(p, true);
-        var ay = App.State.Analyze(p, false);
-
-        string One(string tag, (double threshold, double capSpeed, double capValue, double maxValue) a) =>
-            $"{tag} 从 {a.threshold:0.##} 起加速，峰值 {a.capValue:0.00}" +
-            (double.IsInfinity(a.capSpeed) ? "（不封顶）" : $"，{a.capSpeed:0.##} 处封顶");
-
-        ChartNote.Text = $"{One("X", ax)}  ·  {One("Y", ay)}  ·  {App.State.Telemetry}";
+        // The 起加速 / 封顶 numbers are drawn on the chart itself now (labelled X起 / X顶 / Y起 / Y顶),
+        // so repeating them as a sentence below only creates a second place to keep in sync.
+        ChartNote.Text = App.State.Telemetry + "（色带百分比 = 你最近的手速落在各段的占比，按 X 轴计）";
         PhysicsNote.Text = App.State.PhysicsReadout(p);
     }
 
@@ -358,7 +355,7 @@ public partial class CurvePage : UserControl
     {
         if (!IsLoaded) return;
         App.State.CurveKind = RbSens.IsChecked == true ? CurveKind.Sensitivity
-                             : RbGain.IsChecked == true ? CurveKind.Gain : CurveKind.OutputVelocity;
+                             : RbGain.IsChecked == true ? CurveKind.Gain : CurveKind.Sensitivity;
         App.State.RebuildCurves();
         UpdateNote();
     }

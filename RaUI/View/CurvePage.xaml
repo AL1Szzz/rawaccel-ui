@@ -33,7 +33,6 @@
                     <StackPanel Orientation="Horizontal">
                         <RadioButton x:Name="RbSens" Content="灵敏度" IsChecked="True" Margin="0,0,14,0" Checked="OnKind"/>
                         <RadioButton x:Name="RbGain" Content="增益" Margin="0,0,14,0" Checked="OnKind"/>
-                        <RadioButton x:Name="RbVel" Content="输出速度" Checked="OnKind"/>
                         <CheckBox x:Name="ChkSamples" Content="实时手速" Margin="18,0,0,0" VerticalAlignment="Center"
                                   Click="OnSamples" ToolTip="用 WM_INPUT 采样你真实的手速分布，画在曲线底部"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="20,0,0,0">
