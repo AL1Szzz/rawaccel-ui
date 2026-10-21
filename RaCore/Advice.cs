@@ -29,6 +29,13 @@ public sealed class Trial
     public bool Overshot;               // it went past the far edge of the ball at some point
     public double TimeToTargetMs = double.NaN;   // first moment the pointer was inside the ball
     public double OnsetMs;              // when the movement started
+
+    // ---- path shape: how much the pointer curved instead of going straight (see OpenLoop) ----
+    public double LateralPathPx;        // total travel perpendicular to the aim line
+    public double ArcRatio;             // lateral path / aim distance; 0 = straight line
+    public int PathReversals;           // perpendicular direction changes: 1 = out and back (a hook)
+    public double PerpPeakPx;           // signed furthest distance from the aim line during the impulse
+    public double AsymCoef = double.NaN; // + = Y over-driven vs X, - = X over-driven vs Y, 0 = noise
 }
 
 public readonly record struct AxisProfile(double Threshold, double CapSpeed, double PeakGain);

@@ -650,6 +650,111 @@ public static class SelfTests
         Check(double.IsNaN(upSt.TimeToTargetMedian) && double.IsNaN(upSt.OnsetMedianMs),
             "a duration longer than the round itself is dropped, not logged as a measurement");
 
+        // ---------- path shape: the arc an endpoint number cannot see ----------
+        // A pointer that swings out and comes back lands exactly where a straight one lands, so
+        // the tangential ENDPOINT error (~20px) under-reports what the user actually sees: he
+        // reports drawing arcs and circles. Build a path with a KNOWN injected bend and check
+        // that the estimator recovers its sign and its size.
+        List<MouseSample> BendPath(double ax, double ay, double dist, double e, bool taper,
+                                   out double endX, out double endY)
+        {
+            const int n = 40;
+            var list = new List<MouseSample>();
+            double carryX = 0, carryY = 0, prevX = 0, prevY = 0;
+            endX = endY = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double along = dist * i / (n - 1);
+                double perp = e * along * ax * ay * (taper ? Math.Sin(System.Math.PI * i / (n - 1)) : 1.0);
+                double x = along * ax - perp * ay, y = along * ay + perp * ax;
+                carryX += x - prevX; carryY += y - prevY;
+                int dx = (int)System.Math.Round(carryX), dy = (int)System.Math.Round(carryY);
+                carryX -= dx; carryY -= dy;
+                prevX = x; prevY = y;
+                list.Add(new MouseSample(dx, dy, 2.0, i * 2.0, i + 1));
+                if (i == n - 1) { endX = x; endY = y; }
+            }
+            return list;
+        }
+        const double d45 = 0.7071067811865476;
+
+        var straightP = BendPath(d45, d45, 700, 0, false, out double sx, out double sy);
+        var ps = OpenLoop.Analyze(straightP, 0, 0, 700 * d45, 700 * d45, sx, sy);
+        Check(ps != null && ps.Value.ArcRatio < 0.02 && ps.Value.Reversals == 0
+              && Math.Abs(ps.Value.AsymCoef) < 0.02,
+            $"a straight flick reads as straight: arc {ps?.ArcRatio:0.00}, turns {ps?.Reversals}, e {ps?.AsymCoef:0.000}");
+
+        var bentP = BendPath(d45, d45, 700, 0.10, false, out double bx, out double by);
+        var pb = OpenLoop.Analyze(bentP, 0, 0, 700 * d45, 700 * d45, bx, by);
+        Check(pb != null && pb.Value.AsymCoef > 0.07 && pb.Value.AsymCoef < 0.13,
+            $"an injected +10% Y surplus is recovered as e = {pb?.AsymCoef:0.000} (sign and size)");
+        Check(pb != null && pb.Value.ArcRatio > 0.05 && pb.Value.PerpPeakPx > 15,
+            $"and the arc itself shows up as curvature: ratio {pb?.ArcRatio:0.00}, {pb?.PerpPeakPx:0}px off the line");
+
+        var bentNegP = BendPath(d45, d45, 700, -0.10, false, out double nx, out double ny);
+        var pn = OpenLoop.Analyze(bentNegP, 0, 0, 700 * d45, 700 * d45, nx, ny);
+        Check(pn != null && pn.Value.AsymCoef < -0.07,
+            $"the mirror image (X surplus) flips the sign: e = {pn?.AsymCoef:0.000}");
+
+        var mirroredP = BendPath(d45, -d45, 700, 0.10, false, out double mx, out double my);
+        var pmir = OpenLoop.Analyze(mirroredP, 0, 0, 700 * d45, -700 * d45, mx, my);
+        Check(pmir != null && pmir.Value.AsymCoef > 0.07,
+            $"aiming the other diagonal (down-right) keeps the same +e for the same axis surplus ({pmir?.AsymCoef:0.000})");
+
+        var hookedP = BendPath(d45, d45, 700, 0.10, true, out double hx, out double hy);
+        var phk = OpenLoop.Analyze(hookedP, 0, 0, 700 * d45, 700 * d45, hx, hy);
+        Check(phk != null && phk.Value.Reversals >= 1 && phk.Value.AsymCoef > 0.04,
+            $"a bulge that comes back to the line is still caught: {phk?.Reversals} direction change(s), e {phk?.AsymCoef:0.000}");
+
+        // ...and the swing detector must not turn delivery jitter into "he drew an arc":
+        // +-2px of perpendicular noise on a straight 700px flick is far below one leg
+        var jitter = new List<MouseSample>();
+        var rnd = new System.Random(7);
+        double jx = 0, jy = 0, pjx = 0, pjy = 0;
+        for (int i = 0; i < 80; i++)
+        {
+            double along = 700.0 * i / 79;
+            double jit = (rnd.NextDouble() - 0.5) * 4.0;
+            double x = along * d45 - jit * d45, y = along * d45 + jit * d45;
+            int dxi = (int)System.Math.Round(x - pjx), dyi = (int)System.Math.Round(y - pjy);
+            pjx += dxi; pjy += dyi;
+            jitter.Add(new MouseSample(dxi, dyi, 2.0, i * 2.0, i + 1));
+            jx = pjx; jy = pjy;
+        }
+        var pj = OpenLoop.Analyze(jitter, 0, 0, 700 * d45, 700 * d45, jx, jy);
+        Check(pj != null && pj.Value.Reversals <= 1,
+            $"+-2px of jitter on a straight flick is not counted as an arc ({pj?.Reversals} swing(s))");
+        Check(pj != null && Math.Abs(pj.Value.AsymCoef) < 0.03,
+            $"and jitter carries no axis direction either: e = {pj?.AsymCoef:0.000}");
+
+        // the round-level view: diagonal-only weighting, and noise must not fake a direction
+        List<Trial> ShapeBatch(double e, int n)
+        {
+            var l = new List<Trial>();
+            for (int i = 0; i < n; i++)
+            {
+                double ang = System.Math.PI / 4 + (i % 7) * 0.05;      // all diagonal
+                double c = Math.Cos(ang), s = Math.Sin(ang);
+                var pth = BendPath(c, s, 700, e, false, out double ex, out double ey);
+                var pr = OpenLoop.Analyze(pth, 0, 0, 700 * c, 700 * s, ex, ey);
+                l.Add(new Trial
+                {
+                    DistancePx = 700, AngleRad = ang, Hit = true, HasPrimary = true, SampleCount = 40,
+                    MaxExtentPct = 101, PrimaryRadialPct = 0,
+                    ArcRatio = pr?.ArcRatio ?? 0, LateralPathPx = pr?.LateralPathPx ?? 0,
+                    PerpPeakPx = pr?.PerpPeakPx ?? 0, PathReversals = pr?.Reversals ?? 0,
+                    AsymCoef = pr?.AsymCoef ?? double.NaN,
+                });
+            }
+            return l;
+        }
+        var stE0 = RoundStats.Compute(ShapeBatch(0, 40), 26, 700);
+        var stE1 = RoundStats.Compute(ShapeBatch(0.10, 40), 26, 700);
+        Check(stE0.AsymN >= 30 && Math.Abs(stE0.AsymMean) < 0.02,
+            $"40 straight diagonal flicks give no asymmetry: e = {stE0.AsymMean:0.000} +- {stE0.AsymSem:0.000} (n={stE0.AsymN})");
+        Check(stE1.AsymMean > 0.07 && stE1.AsymMean - 2 * stE1.AsymSem > 0,
+            $"40 flicks with a 10% Y surplus are detected beyond their own scatter: e = {stE1.AsymMean:0.000} +- {stE1.AsymSem:0.000}");
+
         Check(p.Value.MaxExtentPct > 110 && p.Value.Overshot,
             $"a flick that flies past reads max_extent {p.Value.MaxExtentPct:0}% / overshot={p.Value.Overshot}");
 
@@ -821,6 +926,40 @@ public static class SelfTests
             TestLog.Write(f3, same);
             var cmp2 = TestLog.Compare(sum, TestLog.ReadSummary(f3)!);
             Check(cmp2.Any(l => l.Contains("不能全归因")), "a different distance is still flagged as a confound");
+
+            // the shape numbers have to survive the file round trip, not just the in-memory one:
+            // this is the metric the next tuning decision rests on. Hand-set values, because the
+            // simulator flicks are perfectly straight (arc 0.00) and a 0==0 comparison would prove
+            // nothing about the plumbing.
+            var shape = new List<Trial>();
+            for (int i = 0; i < 12; i++)
+                shape.Add(new Trial
+                {
+                    DistancePx = 700, AngleRad = System.Math.PI / 4 + i * 0.05, Hit = true, HasPrimary = true,
+                    SampleCount = 9, MaxExtentPct = 101, PrimaryRadialPct = -3,
+                    ArcRatio = 0.42, LateralPathPx = 294, PerpPeakPx = 31, PathReversals = 1, AsymCoef = 0.08,
+                });
+            var memSt = RoundStats.Compute(shape, 26, 700);
+            var shapeData = new RoundData
+            {
+                RoundId = "round-test-5", When = data.When, DriverVersion = data.DriverVersion,
+                ProfileName = data.ProfileName, ConfigSha = data.ConfigSha, ConfigSource = data.ConfigSource,
+                ProfileJson = data.ProfileJson, Profile = data.Profile, Sensitivity = 1.5, MouseDpi = 600,
+                PollRate = 2000, TargetDistancePx = 700, RadiusPx = 26, TargetCount = 1, Seed = 99,
+                Mode = "点掉 12 球", Score = "点掉 12/12 球", SessionMs = 30000, Direction = "全向",
+                Resolution = "1920x1440@180", Trials = shape, OutputSpeed = data.OutputSpeed, TelemetryNote = "",
+            };
+            var f5 = Path.Combine(dir, "round-test-5.log");
+            TestLog.Write(f5, shapeData);
+            var sum5 = TestLog.ReadSummary(f5)!;
+            Check(Math.Abs(memSt.ArcRatioMedian - 0.42) < 1e-6 && memSt.HookCount == 12 && memSt.AsymN == 12
+                  && Math.Abs(memSt.AsymMean - 0.08) < 1e-6,
+                $"the statistics keep the shape numbers (arc {memSt.ArcRatioMedian:0.00}, hooks {memSt.HookCount}, " +
+                $"e {memSt.AsymMean:0.000} over n={memSt.AsymN} diagonal flicks)");
+            Check(Math.Abs(sum5.ArcRatio - 0.42) < 0.001 && sum5.HookCount == 12 && sum5.AsymN == 12
+                  && Math.Abs(sum5.AsymMean - 0.08) < 0.001 && Math.Abs(sum5.AsymSem - memSt.AsymSem) < 0.001,
+                $"and they come back out of the log file unchanged (arc {sum5.ArcRatio:0.00}, e {sum5.AsymMean:0.000} " +
+                $"+- {sum5.AsymSem:0.000}, n={sum5.AsymN})");
             var idx = Path.Combine(dir, "index.csv");
             Check(File.Exists(idx) && File.ReadAllLines(idx).Length >= 4,
                 "index.csv gets one row per round, in the redirected folder");

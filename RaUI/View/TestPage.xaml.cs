@@ -320,6 +320,11 @@ public partial class TestPage : UserControl
             sb.Append($"\n开环：最远冲到 {st.MaxExtentMedian:0}%（飞过球面的 {st.OvershootCount2}/{st.PrimaryCount} 次）、" +
                       $"入球用时 {Tt(st.TimeToTargetMedian, st.SessionMs)}；第一下停点 {st.PrimaryRadialMedian:+0.0;-0.0}%" +
                       (st.HitExtentMedian > 0 && st.HitExtentMedian < 95 ? "（路径重建有丢失，最远%只能当下限）" : ""));
+        if (st.ArcRatioMedian > 0)
+            sb.Append($"\n轨迹：横向绕路 {st.LateralPathMedian:0}px = 瞄准距离的 {st.ArcRatioMedian:0.00} 倍（0=直线）、" +
+                      $"每发转向 {st.ReversalsMean:0.0} 次、绕回 {st.HookCount}/{st.PrimaryCount} 发" +
+                      (st.AsymN >= 8 ? $"、两轴偏向 e = {st.AsymMean:+0.000;-0.000} ± {st.AsymSem:0.000}（n={st.AsymN}）"
+                                     : "、两轴偏向判不了（斜向不足 8 发）"));
         Summary.Text = sb.ToString();
         Flags.Text = st.Notes.Count == 0 ? "本轮没有质量警告。"
             : "注意点：\n  · " + string.Join("\n  · ", st.Notes.Select(n => n.Zh));
@@ -432,6 +437,17 @@ public partial class TestPage : UserControl
                               $"{s.Overshoot2} 次整体飞出球面） · 入球用时中位 {Tt(s.TimeToTargetMedian, s.SessionMs)}";
         else
             DetailOpen.Text = "开环：这版日志没有开环字段。";
+
+        // path shape: the arc the endpoint numbers cannot see
+        if (s.ArcRatio > 0)
+            DetailShape.Text = $"轨迹形状：横向绕路是瞄准距离的 {s.ArcRatio:0.00} 倍（0 = 直线） · " +
+                               $"每发平均转向 {s.ReversalsMean:0.0} 次 · 绕出去又拉回 {s.HookCount} 发" +
+                               (s.AsymN >= 8
+                                    ? $" · 两轴偏向 e = {s.AsymMean:+0.000;-0.000} ± {s.AsymSem:0.000}（n={s.AsymN} 条斜向甩动；" +
+                                      "e>0 朝 Y 轴鼓，e<0 朝 X 轴鼓，0 = 无方向性）"
+                                    : " · 两轴偏向：斜向甩动不足 8 发，判不了");
+        else
+            DetailShape.Text = "轨迹形状：这版日志没有形状字段（新版跑一轮就有了）。";
 
         var notes = new List<(string text, bool warn)>();
         notes.AddRange(s.NotesZh);

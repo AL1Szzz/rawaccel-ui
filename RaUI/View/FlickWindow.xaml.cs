@@ -397,6 +397,8 @@ public partial class FlickWindow : Window
             trial.Corrected = pm.Corrected; trial.PrimaryScaled = pm.Scaled;
             trial.MaxExtentPct = pm.MaxExtentPct; trial.Overshot = pm.Overshot;
             trial.TimeToTargetMs = pm.TimeToTargetMs; trial.OnsetMs = pm.OnsetMs;
+            trial.LateralPathPx = pm.LateralPathPx; trial.ArcRatio = pm.ArcRatio;
+            trial.PathReversals = pm.Reversals; trial.PerpPeakPx = pm.PerpPeakPx; trial.AsymCoef = pm.AsymCoef;
         }
         TrialDone?.Invoke(trial);
 

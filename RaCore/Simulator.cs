@@ -160,6 +160,9 @@ public static class Simulator
                 Corrected = prim?.Corrected ?? false, PrimaryScaled = prim?.Scaled ?? false,
                 MaxExtentPct = prim?.MaxExtentPct ?? 0, Overshot = prim?.Overshot ?? false,
                 TimeToTargetMs = prim?.TimeToTargetMs ?? double.NaN, OnsetMs = prim?.OnsetMs ?? 0,
+                LateralPathPx = prim?.LateralPathPx ?? 0, ArcRatio = prim?.ArcRatio ?? 0,
+                PathReversals = prim?.Reversals ?? 0, PerpPeakPx = prim?.PerpPeakPx ?? 0,
+                AsymCoef = prim?.AsymCoef ?? double.NaN,
             });
             ox = tx; oy = ty;
         }

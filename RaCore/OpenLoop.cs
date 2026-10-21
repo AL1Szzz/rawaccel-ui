@@ -15,7 +15,12 @@ public readonly record struct PrimaryImpulse(
     double TimeMs, double PeakCms, bool Corrected, int Samples, bool Scaled,
     // segmentation-free measures: they answer "did the gain make him fly past the target"
     // without having to decide where one submovement ends and the next begins
-    double MaxExtentPct, bool Overshot, double TimeToTargetMs, double OnsetMs);
+    double MaxExtentPct, bool Overshot, double TimeToTargetMs, double OnsetMs,
+    // ---- path SHAPE. The endpoint measures above are blind to an arc: a pointer that loops
+    // out and comes back lands exactly where a straight flick lands (measured: tangential
+    // endpoint error is only ~20-28px on 700px flicks while the user reports drawing circles).
+    // Shape survives the click-normalised rescale because the rescale is isotropic.
+    double LateralPathPx, double ArcRatio, int Reversals, double PerpPeakPx, double AsymCoef);
 
 public static class OpenLoop
 {
@@ -140,10 +145,70 @@ public static class OpenLoop
         double afterMove = Math.Sqrt(Math.Pow(px[^1] - px[end], 2) + Math.Pow(py[^1] - py[end], 2));
         bool corrected = afterMove > Math.Max(dist * 0.08, reachRadius);
 
+        // ---- shape of the path, in the same click-normalised px as everything above ----
+        // perp[i] is the signed distance from the aim line; the screen deviation vector is
+        // perp * (-ay, ax).
+        var perp = new double[px.Length];
+        for (int i = 0; i < px.Length; i++) perp[i] = -px[i] * ay + py[i] * ax;
+
+        double lateralPath = 0;
+        for (int i = 1; i < perp.Length; i++) lateralPath += Math.Abs(perp[i] - perp[i - 1]);
+
+        // Direction changes have to be counted as SWINGS, not per window: one 2ms window of a
+        // smooth 35px arc moves the offset by half a pixel, so any per-step threshold either
+        // kills the real turn or counts jitter as one. Zigzag: a leg ends when the series pulls
+        // minLeg away from its running extreme.
+        int reversals = 0;
+        double minLeg = Math.Max(6.0, dist * 0.015);
+        double extreme = perp[0];
+        int trend = 0;                                   // 0 = no leg established yet
+        for (int i = 1; i < perp.Length; i++)
+        {
+            double v = perp[i];
+            if (trend == 0)
+            {
+                if (Math.Abs(v - extreme) < minLeg) continue;
+                trend = v > extreme ? 1 : -1;
+                extreme = v;
+                continue;
+            }
+            if (trend > 0)
+            {
+                if (v > extreme) extreme = v;
+                else if (extreme - v >= minLeg) { reversals++; trend = -1; extreme = v; }
+            }
+            else
+            {
+                if (v < extreme) extreme = v;
+                else if (v - extreme >= minLeg) { reversals++; trend = 1; extreme = v; }
+            }
+        }
+
+        double perpPeak = 0;
+        for (int i = 0; i <= end; i++)
+            if (Math.Abs(perp[i]) > Math.Abs(perpPeak)) perpPeak = perp[i];
+
+        // The axis-asymmetry estimator. If one axis is over-driven relative to the other by a
+        // relative amount e, the pointer is displaced by e*(0, y_travel) for a Y surplus, whose
+        // component off the aim line works out to perp ~= e * along * ax * ay. So the least
+        // squares slope of perp on (along * ax * ay) IS e: positive = Y gains more than X,
+        // negative = X gains more than Y, and pure motor noise has no such alignment and
+        // averages towards zero. Diagonal aims carry the signal; straight horizontal or vertical
+        // flicks have ax*ay ~ 0 and contribute nothing (their weight is (ax*ay)^2).
+        double axay = ax * ay, num = 0, den = 0;
+        for (int i = 0; i <= end; i++)
+        {
+            double basis = along[i] * axay;
+            num += perp[i] * basis;
+            den += basis * basis;
+        }
+        double asym = den > 1e-9 ? num / den : double.NaN;
+
         return new PrimaryImpulse(radial, tang, err, radial / dist * 100.0,
                                   samples[end].timeMs - startMs, sp.Max(), corrected, samples.Count, scaled,
                                   maxAlong / dist * 100.0, maxAlong > dist + reachRadius,
                                   firstIn >= 0 ? samples[firstIn].timeMs - startMs : double.NaN,
-                                  samples[onset].timeMs - startMs);
+                                  samples[onset].timeMs - startMs,
+                                  lateralPath, lateralPath / dist, reversals, perpPeak, asym);
     }
 }

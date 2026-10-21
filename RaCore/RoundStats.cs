@@ -51,6 +51,10 @@ public sealed class RoundStats
     public double HitExtentMedian;                 // guard: hits must have reached ~100%
     public int OvershootCount2;
     public double TimeToTargetMedian, OnsetMedianMs;
+    // path shape: curvature and the axis-asymmetry coefficient behind it
+    public double ArcRatioMedian, LateralPathMedian, PerpPeakMedian, ReversalsMean;
+    public int HookCount;                       // flicks that turned sideways at least once
+    public double AsymMean, AsymSem; public int AsymN;
     public double PeakMedianWhenMeasured;
 
     /// <summary>One data-quality remark in both languages: the log file carries the English
@@ -166,6 +170,25 @@ public sealed class RoundStats
             var ttt = prim.Where(x => !double.IsNaN(x.TimeToTargetMs)).Select(x => x.TimeToTargetMs).ToList();
             s.TimeToTargetMedian = Median(ttt);
             s.OnsetMedianMs = Median(prim.Select(x => x.OnsetMs).ToList());
+
+            // ---- how much of the flick was an arc rather than a line, and which axis is to blame ----
+            s.ArcRatioMedian = Median(prim.Select(x => x.ArcRatio).ToList());
+            s.LateralPathMedian = Median(prim.Select(x => x.LateralPathPx).ToList());
+            s.PerpPeakMedian = Median(prim.Select(x => x.PerpPeakPx).ToList());
+            s.ReversalsMean = Mean(prim.Select(x => (double)x.PathReversals).ToList());
+            s.HookCount = prim.Count(x => x.PathReversals >= 1);
+            // only diagonal aims can carry the axis signal (its weight is (ax*ay)^2), and the
+            // coefficient is meaningless when that product is near zero
+            var diag = prim.Where(x => !double.IsNaN(x.AsymCoef) &&
+                                       Math.Abs(Math.Cos(x.AngleRad) * Math.Sin(x.AngleRad)) >= 0.15).ToList();
+            s.AsymN = diag.Count;
+            if (diag.Count >= 8)
+            {
+                var c = diag.Select(x => x.AsymCoef).ToList();
+                s.AsymMean = Mean(c);
+                s.AsymSem = c.Count > 1 ? StdDev(c) / Math.Sqrt(c.Count) : 0;
+            }
+
             // a "duration" longer than the round itself is an absolute timestamp that escaped a
             // clock mismatch, not a measurement - refuse to publish it in the log the AI reads
             if (s.SessionMs > 0)

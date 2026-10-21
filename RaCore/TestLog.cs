@@ -62,6 +62,8 @@ public sealed class RoundSummary
     /// <summary>Segmentation-free open-loop medians; 0 when the file predates them.</summary>
     public double MaxExtentMedian, HitExtentMedian;
     public int Overshoot2;
+    /// <summary>Path curvature and the axis-asymmetry fit; see the meaning block of the log.</summary>
+    public double ArcRatio, ReversalsMean, AsymMean, AsymSem; public int HookCount, AsymN;
     public double TimeToTargetMedian;
     /// <summary>Same remarks as Quality, in the language the UI shows. Empty in pre-v3.1 files.</summary>
     public List<(string Text, bool Warn)> NotesZh = new();
@@ -230,6 +232,12 @@ public static class TestLog
             if (stats.HitExtentMedian > 0)
                 sb.AppendLine($"                 guard: flicks that hit the ball reached {stats.HitExtentMedian:0}% of the distance " +
                               "(must be >=95, otherwise the path reconstruction is losing travel)");
+            sb.AppendLine($"path shape     : sideways travel {stats.LateralPathMedian:0}px on a {stats.DistanceMedian:0}px flick " +
+                          $"= arc ratio {stats.ArcRatioMedian:0.00}x the aim (0 = straight)   direction changes {stats.ReversalsMean:0.0}/flick   " +
+                          $"hooks (>=1 turn) {stats.HookCount}/{stats.PrimaryCount}   furthest off the line {stats.PerpPeakMedian:+0;-0}px");
+            if (stats.AsymN >= 8)
+                sb.AppendLine($"axis asymmetry : e = {stats.AsymMean:+0.000;-0.000} +- {stats.AsymSem:0.000} (n={stats.AsymN} diagonal flicks)   " +
+                              "fit perp = e * along * ax * ay:  e>0 bends towards Y (Y gains more), e<0 bends towards X, 0 = unaligned noise");
             sb.AppendLine($"speed captured : {stats.MeasuredCount}/{stats.Count} trials" +
                           (stats.MeasuredCount > 0 ? $"   median peak where measured {stats.PeakMedianWhenMeasured:0.0} c/ms" : ""));
             sb.AppendLine($"empty clicks   : {stats.EmptyClickCount} (click hit no ball; scored against the nearest one)");
@@ -323,6 +331,13 @@ public static class TestLog
                 ["ballUnderCursorFalse"] = "the click hit no ball; scored against the nearest one (a miss)",
                 ["speedIsHandSpeed"] = false,
                 ["angleIsGameAngle"] = false,
+                ["arcRatio"] = "perpendicular path length / aim distance. Endpoint measures cannot see an arc " +
+                               "(a pointer that loops out and comes back lands exactly where a straight one does), " +
+                               "so this is the curvature the eye sees and the endpoint error does not",
+                ["asymCoef"] = "least-squares fit of the signed off-line offset against along * ax * ay over the " +
+                               "primary impulse. A relative over-drive e of one axis versus the other predicts exactly " +
+                               "that shape: e>0 bends towards the Y axis, e<0 towards X, and motor noise has no such " +
+                               "alignment and averages towards 0. Only diagonal aims carry it, hence asymN",
             },
             ["statistics"] = new Dictionary<string, object?>
             {
@@ -364,6 +379,12 @@ public static class TestLog
                 ["hitExtentMedianPct"] = Num3(st.HitExtentMedian),
                 ["overshoot2"] = st.OvershootCount2,
                 ["timeToTargetMedianMs"] = Num3(st.TimeToTargetMedian),
+                ["arcRatioMedian"] = Num3(st.ArcRatioMedian),
+                ["lateralPathMedianPx"] = Num3(st.LateralPathMedian),
+                ["perpPeakMedianPx"] = Num3(st.PerpPeakMedian),
+                ["reversalsMean"] = Num3(st.ReversalsMean),
+                ["hookCount"] = st.HookCount,
+                ["asymCoef"] = Num3(st.AsymMean), ["asymSem"] = Num3(st.AsymSem), ["asymN"] = st.AsymN,
             },
             ["openLoop"] = new Dictionary<string, object?>
             {
@@ -403,6 +424,9 @@ public static class TestLog
                     ["maxExtentPct"] = Round(t.MaxExtentPct), ["overshot"] = t.Overshot,
                     ["timeToTargetMs"] = double.IsNaN(t.TimeToTargetMs) ? null : Round(t.TimeToTargetMs),
                     ["onsetMs"] = Round(t.OnsetMs),
+                    ["arcRatio"] = Round(t.ArcRatio), ["lateralPathPx"] = Round(t.LateralPathPx),
+                    ["reversals"] = t.PathReversals, ["perpPeakPx"] = Round(t.PerpPeakPx),
+                    ["asymCoef"] = double.IsNaN(t.AsymCoef) ? null : Round(t.AsymCoef),
                 } : null,
             }).ToList(),
             ["patchApplied"] = string.IsNullOrWhiteSpace(d.AppliedPatch) ? null : d.AppliedPatch,
@@ -502,6 +526,10 @@ public static class TestLog
                 s.HitExtentMedian = D(st, "hitExtentMedianPct");
                 s.Overshoot2 = (int)D(st, "overshoot2");
                 s.TimeToTargetMedian = D(st, "timeToTargetMedianMs");
+                s.ArcRatio = D(st, "arcRatioMedian");
+                s.ReversalsMean = D(st, "reversalsMean");
+                s.HookCount = (int)D(st, "hookCount");
+                s.AsymMean = D(st, "asymCoef"); s.AsymSem = D(st, "asymSem"); s.AsymN = (int)D(st, "asymN");
             }
             return s;
         }

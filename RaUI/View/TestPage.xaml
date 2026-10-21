@@ -72,6 +72,8 @@
                                     <TextBlock x:Name="DetailHead" TextWrapping="Wrap" FontSize="12.5"/>
                                     <TextBlock x:Name="DetailOpen" Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"
                                                TextWrapping="Wrap" FontSize="12"/>
+                                    <TextBlock x:Name="DetailShape" Style="{StaticResource SubtleTextStyle}" Margin="0,3,0,0"
+                                               TextWrapping="Wrap" FontSize="12" Foreground="#FF9BD8FF"/>
                                     <Expander x:Name="NotesExpander" Visibility="Collapsed" Margin="0,8,0,0">
                                         <Expander.Header>
                                             <TextBlock x:Name="NotesHeader" Text="注意点"/>
