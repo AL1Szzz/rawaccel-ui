@@ -649,6 +649,27 @@ public static class SelfTests
         var p2 = OpenLoop.Analyze(path, 0, 0, 700, 0, 1480, 0, 1000, 2000);
         Check(p2 != null && p2.Value.Scaled && p2.Value.RadialPx > 0,
             $"path rescaled to the real displacement ({p2?.RadialPx:0.0}px past, scaled={p2?.Scaled})");
+
+        // the exact failure of the 2026-10-21 morning rounds: the path is in raw counts while the
+        // click is in screen px, and the true gain (1.176x here) sat inside the old [0.8,1.25]
+        // "small mismatch" band - so the rescale was skipped and every hit read ~86% of its
+        // extent, tripping the travel guard on all 5 real rounds. The click is ground truth.
+        double g = 1.176;
+        var cnt = new List<MouseSample>();
+        double t3 = 1002, acc = 0; int emitted = 0;
+        foreach (double d in spiky)
+        {
+            acc += d / g;                       // the driver emits integer counts: carry the remainder
+            int whole = (int)Math.Round(acc);
+            t3 += 2;
+            cnt.Add(new MouseSample(whole - emitted, 0, 2.0, t3, cnt.Count + 1));
+            emitted = whole;
+        }
+        var r = OpenLoop.Analyze(cnt, 0, 0, 700, 0, 700, 0, 1002, t3 + 20);
+        Check(r != null && q != null && Math.Abs(r.Value.MaxExtentPct - q.Value.MaxExtentPct) < 0.5,
+            $"a counts-unit flick reads the same shape as the px flick ({r?.MaxExtentPct:0.0}% vs {q?.MaxExtentPct:0.0}%; the old band read ~86%)");
+        Check(r != null && q != null && Math.Abs(r.Value.RadialPct - q.Value.RadialPct) < 0.5,
+            $"and its impulse is not reported short by the unit gap ({r?.RadialPct:0.0}% vs {q?.RadialPct:0.0}%)");
     }
 
     // ---------- H ----------

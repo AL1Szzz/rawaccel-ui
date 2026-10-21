@@ -76,16 +76,20 @@ public static class OpenLoop
         }
         if (Math.Abs(px[^1]) < 1e-9 && Math.Abs(py[^1]) < 1e-9) return null;
 
-        // rescale counts -> real pointer displacement when the two disagree
+        // rescale counts -> real pointer displacement. The click IS ground truth, so the whole
+        // path is always scaled to end on the real click displacement; only the shape is measured.
+        // Earlier this only fired when |path|/real fell outside [0.8, 1.25] - but the path is in
+        // raw counts and the baseline curve's true gain spans 1.0~1.97x, so moderate flicks sat
+        // inside that band, skipped the rescale, and read 82~92% of their true extent (measured:
+        // the round guard fired on all 5 real baseline rounds of 2026-10-21 morning).
         bool scaled = false;
-        double endX = originX + px[^1], endY = originY + py[^1];
-        double recon = Math.Sqrt(Math.Pow(endX - originX, 2) + Math.Pow(endY - originY, 2));
+        double recon = Math.Sqrt(px[^1] * px[^1] + py[^1] * py[^1]);
         double real = Math.Sqrt(Math.Pow(clickX - originX, 2) + Math.Pow(clickY - originY, 2));
-        if (recon > 1 && real > 1 && (recon / real < 0.8 || recon / real > 1.25))
+        if (recon > 1 && real > 1)
         {
             double k = real / recon;
             for (int i = 0; i < px.Length; i++) { px[i] *= k; py[i] *= k; }
-            scaled = true;
+            scaled = k is < 0.8 or > 1.25;   // a rescale that is nearly a no-op isn't worth flagging
         }
 
         int peak = 0;
