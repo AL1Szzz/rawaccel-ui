@@ -51,12 +51,20 @@ public static class OpenLoop
     /// aimX/aimY - unit vector from origin to target; distancePx - |target - origin|.
     /// The reconstructed path is in mouse counts; if it disagrees with the real click displacement
     /// (pointer speed, display scaling) the whole path is scaled to match, so the shape is kept.
+    ///
+    /// Durations are measured against the FIRST SAMPLE's own timestamp, never against a clock the
+    /// caller passes in: the samples come from the raw-input monitor's process-wide stopwatch while
+    /// each window belongs to the test window's own stopwatch, and the two differ by however long
+    /// the app has been running. Feeding the caller's start time produced "time to target = 421141ms"
+    /// in the first real rounds after the fix (measured 2026-10-21 17:55) - a 7-minute app uptime
+    /// leaking into a 0.4s flick.
     /// </summary>
     public static PrimaryImpulse? Analyze(IReadOnlyList<MouseSample> samples, double originX, double originY,
                                           double targetX, double targetY, double clickX, double clickY,
-                                          double startMs, double clickMs, double reachRadius = 26)
+                                          double reachRadius = 26)
     {
         if (samples == null || samples.Count < 4) return null;
+        double startMs = samples[0].timeMs;     // the only clock these durations can be relative to
 
         double ax = targetX - originX, ay = targetY - originY;
         double dist = Math.Sqrt(ax * ax + ay * ay);

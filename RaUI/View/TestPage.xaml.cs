@@ -318,7 +318,7 @@ public partial class TestPage : UserControl
                   (w != null && !string.IsNullOrEmpty(w.UsedResolution) ? $"   {w.UsedResolution}" : ""));
         if (st.PrimaryCount > 0)
             sb.Append($"\n开环：最远冲到 {st.MaxExtentMedian:0}%（飞过球面的 {st.OvershootCount2}/{st.PrimaryCount} 次）、" +
-                      $"入球用时 {st.TimeToTargetMedian:0}ms；第一下停点 {st.PrimaryRadialMedian:+0.0;-0.0}%" +
+                      $"入球用时 {Tt(st.TimeToTargetMedian, st.SessionMs)}；第一下停点 {st.PrimaryRadialMedian:+0.0;-0.0}%" +
                       (st.HitExtentMedian > 0 && st.HitExtentMedian < 95 ? "（路径重建有丢失，最远%只能当下限）" : ""));
         Summary.Text = sb.ToString();
         Flags.Text = st.Notes.Count == 0 ? "本轮没有质量警告。"
@@ -326,6 +326,12 @@ public partial class TestPage : UserControl
     }
 
     // ---------- round history / comparison ----------
+
+    /// <summary>A "duration" longer than the whole round is not a duration: it is an absolute
+    /// timestamp that leaked in through a clock mismatch (exactly what the five rounds written
+    /// 2026-10-21 17:55~18:16 contain - 421141ms of app uptime inside a 0.4s flick). Show a dash
+    /// rather than a number someone might read as a measurement.</summary>
+    static string Tt(double ms, double sessionMs) => ms <= 0 || ms > sessionMs ? "—" : $"{ms:0}ms";
 
     /// <summary>One row of the history list. String properties because the GridView binds them.</summary>
     public sealed class Row
@@ -421,8 +427,8 @@ public partial class TestPage : UserControl
         if (!s.OpenLoopUsable)
             DetailOpen.Text = "开环：这轮来自旧构建（路径重建有已知问题），开环数字不可用，别用它判断参数。";
         else if (s.MaxExtentMedian > 0)
-            DetailOpen.Text = $"开环：甩动最远冲到 {s.MaxExtentMedian:0}%（{s.Overshoot2} 次整体飞出球面） · " +
-                              $"入球用时中位 {s.TimeToTargetMedian:0}ms（>100% = 甩过头，这是判增益改动的第一尺子）";
+            DetailOpen.Text = $"开环：甩动最远冲到 {s.MaxExtentMedian:0}%（>100% = 甩过头，这是判增益改动的第一尺子；" +
+                              $"{s.Overshoot2} 次整体飞出球面） · 入球用时中位 {Tt(s.TimeToTargetMedian, s.SessionMs)}";
         else
             DetailOpen.Text = "开环：这版日志没有开环字段。";
 

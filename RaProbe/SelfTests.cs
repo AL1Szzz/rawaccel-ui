@@ -525,7 +525,7 @@ public static class SelfTests
 
         // 1) a clean flick that lands on the first movement
         var a = Simulator.Flick1(dist, 6.0, 1.00, seed: 11, emptyWindowRate: 0.18);
-        var pa = OpenLoop.Analyze(a.Path, 0, 0, dist, 0, dist, 0, a.StartMs, a.Path[^1].timeMs, 26);
+        var pa = OpenLoop.Analyze(a.Path, 0, 0, dist, 0, dist, 0, 26);
         Check(pa != null, "clean flick reconstructed");
         if (pa == null) return;
         double truthA = a.TrueMaxExtentPx / dist * 100.0;
@@ -540,7 +540,7 @@ public static class SelfTests
 
         // 2) a flick that flies 15% past the target and is pulled back
         var b = Simulator.Flick1(dist, 6.0, 1.15, seed: 22, emptyWindowRate: 0.18);
-        var pb = OpenLoop.Analyze(b.Path, 0, 0, dist, 0, dist, 0, b.StartMs, b.Path[^1].timeMs, 26);
+        var pb = OpenLoop.Analyze(b.Path, 0, 0, dist, 0, dist, 0, 26);
         double truthB = b.TrueMaxExtentPx / dist * 100.0;
         Check(pb != null && Math.Abs(pb.Value.MaxExtentPct - truthB) < 3 && pb.Value.Overshot,
             $"overshooting flick: max_extent {pb?.MaxExtentPct:0.0}% against injected {truthB:0.0}%, overshot={pb?.Overshot}");
@@ -551,7 +551,7 @@ public static class SelfTests
 
         // 3) a flick that stops at 76% and creeps in - the case the old code truncated wrongly
         var c = Simulator.Flick1(dist, 6.0, 0.76, seed: 33, emptyWindowRate: 0.18);
-        var pc = OpenLoop.Analyze(c.Path, 0, 0, dist, 0, dist, 0, c.StartMs, c.Path[^1].timeMs, 26);
+        var pc = OpenLoop.Analyze(c.Path, 0, 0, dist, 0, dist, 0, 26);
         double truthC = c.TrueMaxExtentPx / dist * 100.0;
         Check(pc != null && Math.Abs(pc.Value.MaxExtentPct - truthC) < 3,
             $"short-then-creep flick: max_extent {pc?.MaxExtentPct:0.0}% against injected {truthC:0.0}%");
@@ -596,7 +596,7 @@ public static class SelfTests
         double t = 1000;
         foreach (var d in dx) { path.Add(new MouseSample(d, 0, 2.0, t, path.Count + 1)); t += 2; }
 
-        var p = OpenLoop.Analyze(path, 0, 0, 700, 0, 740, 0, 1000, t + 400);
+        var p = OpenLoop.Analyze(path, 0, 0, 700, 0, 740, 0);
         Check(p != null, "a path with enough windows is reconstructed");
         if (p == null) return;
         Check(p.Value.RadialPx > 60 && p.Value.RadialPct > 8,
@@ -611,7 +611,7 @@ public static class SelfTests
         var sp2 = new List<MouseSample>();
         double t2 = 1000;
         foreach (var d in spiky) { t2 += 2; sp2.Add(new MouseSample(d, 0, 2.0, t2, sp2.Count + 1)); }
-        var q = OpenLoop.Analyze(sp2, 0, 0, 700, 0, 700, 0, 1002, t2 + 20);
+        var q = OpenLoop.Analyze(sp2, 0, 0, 700, 0, 700, 0);
         Check(q != null && Math.Abs(q.Value.RadialPct) < 6,
             $"a monotone ramp with two empty windows is not truncated ({q?.RadialPct:0.0}%)");
         Check(q != null && !q.Value.Corrected, "and that ramp is not counted as corrected");
@@ -619,6 +619,37 @@ public static class SelfTests
             $"a clean flick that never passes the ball reads max_extent {q?.MaxExtentPct:0}% / overshot={q?.Overshot}");
         Check(q != null && !double.IsNaN(q.Value.TimeToTargetMs),
             $"the moment it first entered the ball is measurable ({q?.TimeToTargetMs:0}ms)");
+
+        // the clock-base regression: in the app the samples carry the raw-input monitor's
+        // process-wide stopwatch while the flick window belongs to the test window's own
+        // stopwatch, so the two differ by the app uptime. The first real rounds after the
+        // rescale fix logged "time to target = 421141ms" (2026-10-21 17:55) - 7 minutes of
+        // uptime leaking into a 0.4s flick. Simulated flicks start at t=0, so only an
+        // explicitly offset path can catch this class of bug.
+        var shifted = new List<MouseSample>();
+        foreach (var s in sp2)
+            shifted.Add(new MouseSample(s.dx, s.dy, s.dtMs, s.timeMs + 420_000, shifted.Count + 1));
+        var qShift = OpenLoop.Analyze(shifted, 0, 0, 700, 0, 700, 0);
+        Check(qShift != null && Math.Abs(qShift.Value.TimeToTargetMs - q!.Value.TimeToTargetMs) < 1e-6
+              && Math.Abs(qShift.Value.OnsetMs - q.Value.OnsetMs) < 1e-6
+              && Math.Abs(qShift.Value.TimeMs - q.Value.TimeMs) < 1e-6,
+            "durations do not move when the sample clock starts 7 minutes into the process");
+        Check(qShift != null && qShift.Value.TimeToTargetMs < 1_000 && qShift.Value.OnsetMs < 1_000,
+            $"every open-loop duration is a flick-sized number, not an uptime ({qShift?.TimeToTargetMs:0}ms / {qShift?.OnsetMs:0}ms)");
+
+        // and if such a value ever reaches the statistics anyway, it must not survive into the log
+        var uptime = new List<Trial>();
+        for (int i = 0; i < 10; i++)
+            uptime.Add(new Trial
+            {
+                DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 101, PrimaryRadialPct = 0,
+                SampleCount = 9, StartMs = 420_000 + i * 500, EndMs = 420_400 + i * 500,
+                TimeToTargetMs = 421_141, OnsetMs = 420_500,
+            });
+        var upSt = RoundStats.Compute(uptime, 26, 700);
+        Check(double.IsNaN(upSt.TimeToTargetMedian) && double.IsNaN(upSt.OnsetMedianMs),
+            "a duration longer than the round itself is dropped, not logged as a measurement");
+
         Check(p.Value.MaxExtentPct > 110 && p.Value.Overshot,
             $"a flick that flies past reads max_extent {p.Value.MaxExtentPct:0}% / overshot={p.Value.Overshot}");
 
@@ -644,12 +675,12 @@ public static class SelfTests
         Check(!RoundStats.Compute(Short(10, 101), 26, 700).Quality.Any(q => q.Contains("losing pointer travel")),
             "and the same check stays quiet when hits really reached the ball");
 
-        Check(OpenLoop.Analyze(path[..2], 0, 0, 700, 0, 740, 0, 1000, 1010) == null,
+        Check(OpenLoop.Analyze(path[..2], 0, 0, 700, 0, 740, 0) == null,
             "two windows are not enough to claim an initial impulse");
-        Check(OpenLoop.Analyze(path, 0, 0, 0, 0, 1, 1, 1000, 1100) == null, "a zero-length aim is refused");
+        Check(OpenLoop.Analyze(path, 0, 0, 0, 0, 1, 1) == null, "a zero-length aim is refused");
 
         // counts disagree with the pointer's real travel (scaling/DPI): the shape is kept, rescaled
-        var p2 = OpenLoop.Analyze(path, 0, 0, 700, 0, 1480, 0, 1000, 2000);
+        var p2 = OpenLoop.Analyze(path, 0, 0, 700, 0, 1480, 0);
         Check(p2 != null && p2.Value.Scaled && p2.Value.RadialPx > 0,
             $"path rescaled to the real displacement ({p2?.RadialPx:0.0}px past, scaled={p2?.Scaled})");
 
@@ -668,7 +699,7 @@ public static class SelfTests
             cnt.Add(new MouseSample(whole - emitted, 0, 2.0, t3, cnt.Count + 1));
             emitted = whole;
         }
-        var r = OpenLoop.Analyze(cnt, 0, 0, 700, 0, 700, 0, 1002, t3 + 20);
+        var r = OpenLoop.Analyze(cnt, 0, 0, 700, 0, 700, 0);
         Check(r != null && q != null && Math.Abs(r.Value.MaxExtentPct - q.Value.MaxExtentPct) < 0.5,
             $"a counts-unit flick reads the same shape as the px flick ({r?.MaxExtentPct:0.0}% vs {q?.MaxExtentPct:0.0}%; the old band read ~86%)");
         Check(r != null && q != null && Math.Abs(r.Value.RadialPct - q.Value.RadialPct) < 0.5,

@@ -360,10 +360,10 @@ public static class TestLog
                 ["truncatedTrials"] = st.TruncatedCount,
                 ["qualityFlags"] = st.Quality,
                 ["qualityZh"] = st.Notes.Select(n => new Dictionary<string, object?> { ["t"] = n.Zh, ["warn"] = n.Warn }).ToList(),
-                ["maxExtentMedianPct"] = Round(st.MaxExtentMedian),
-                ["hitExtentMedianPct"] = Round(st.HitExtentMedian),
+                ["maxExtentMedianPct"] = Num3(st.MaxExtentMedian),
+                ["hitExtentMedianPct"] = Num3(st.HitExtentMedian),
                 ["overshoot2"] = st.OvershootCount2,
-                ["timeToTargetMedianMs"] = Round(st.TimeToTargetMedian),
+                ["timeToTargetMedianMs"] = Num3(st.TimeToTargetMedian),
             },
             ["openLoop"] = new Dictionary<string, object?>
             {
@@ -418,6 +418,10 @@ public static class TestLog
 
     static object? JNum(double v) => double.IsInfinity(v) ? "inf" : Round(v);
     static double Round(double v) => Math.Round(v, 3, MidpointRounding.AwayFromZero);
+
+    /// <summary>JSON has no NaN: a measure that could not be computed has to leave the machine
+    /// block as null, or the whole embedded block stops parsing.</summary>
+    static object? Num3(double v) => double.IsFinite(v) ? Math.Round(v, 3, MidpointRounding.AwayFromZero) : null;
 
     static void Line(StringBuilder sb, string tag, AxisProfile a) =>
         sb.AppendLine($"{tag}: accel starts {Num(a.Threshold)} counts/ms, " +

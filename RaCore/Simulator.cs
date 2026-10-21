@@ -142,8 +142,7 @@ public static class Simulator
             double clickAlong = distancePx;                      // the correction lands on the target
             var (radial, tang, err, pct) = TargetLayout.Score(ox + ax * clickAlong, oy + ay * clickAlong, ox, oy, tx, ty);
 
-            var prim = OpenLoop.Analyze(f1.Path, ox, oy, tx, ty, ox + ax * clickAlong, oy + ay * clickAlong,
-                                        f1.StartMs, f1.Path[^1].timeMs, 26);
+            var prim = OpenLoop.Analyze(f1.Path, ox, oy, tx, ty, ox + ax * clickAlong, oy + ay * clickAlong, 26);
             list.Add(new Trial
             {
                 DistancePx = distancePx,

@@ -387,8 +387,7 @@ public partial class FlickWindow : Window
         rule.ElapsedMs = clock.Elapsed.TotalMilliseconds - sessionStartedMs;
 
         // open-loop view of the same flick: where the FIRST movement actually stopped
-        var prim = OpenLoop.Analyze(win, flickOriginX, flickOriginY, tgt.X, tgt.Y, cpx, cpy,
-                                    flickStartMs, trial.EndMs, cfg.RadiusPx);
+        var prim = OpenLoop.Analyze(win, flickOriginX, flickOriginY, tgt.X, tgt.Y, cpx, cpy, cfg.RadiusPx);
         if (prim is { } pm)
         {
             trial.HasPrimary = true;

@@ -166,6 +166,13 @@ public sealed class RoundStats
             var ttt = prim.Where(x => !double.IsNaN(x.TimeToTargetMs)).Select(x => x.TimeToTargetMs).ToList();
             s.TimeToTargetMedian = Median(ttt);
             s.OnsetMedianMs = Median(prim.Select(x => x.OnsetMs).ToList());
+            // a "duration" longer than the round itself is an absolute timestamp that escaped a
+            // clock mismatch, not a measurement - refuse to publish it in the log the AI reads
+            if (s.SessionMs > 0)
+            {
+                if (s.TimeToTargetMedian > s.SessionMs) s.TimeToTargetMedian = double.NaN;
+                if (s.OnsetMedianMs > s.SessionMs) s.OnsetMedianMs = double.NaN;
+            }
             if (noFix.Count >= 8)
             {
                 s.NoFixPrimMedian = Median(noFix.Select(x => x.PrimaryRadialPct).ToList());
