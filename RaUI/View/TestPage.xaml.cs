@@ -341,11 +341,12 @@ public partial class TestPage : UserControl
         {
             get
             {
-                // round-2026-10-21_16-57-28-366 -> 10-21 16:57:28 (the file name is the round START)
+                // round-2026-10-21_16-57-28-366 -> 10-21 16:57:28 (the file name is the round START;
+                // S.When is when the log was written, i.e. the round END, and two rounds can share it)
                 var name = System.IO.Path.GetFileNameWithoutExtension(S.File);
                 if (name.Length < 25) return S.When;
-                string core = name[6..^4];                    // 2026-10-21_16-57-28
-                return core.Length < 21 ? S.When : core[5..10] + " " + core[11..].Replace('-', ':');
+                string core = name[6..^4];                    // 2026-10-21_16-57-28 (19 chars)
+                return core.Length < 19 ? S.When : core[5..10] + " " + core[11..].Replace('-', ':');
             }
         }
         public string Hit => $"{S.HitRate:0.0}%（{S.BallsCleared}/{S.Clicks}）";
