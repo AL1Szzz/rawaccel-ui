@@ -89,6 +89,34 @@ public partial class App : Application
             return;
         }
 
+        // Set login autostart from here rather than with reg.exe: Enable() builds the command
+        // string, so this and the Settings page can never drift apart into two different recipes.
+        if (System.Array.Exists(e.Args, a => a == "--autostart-enable"))
+        {
+            Headless = true;
+            Autostart.Enable(writeAtLogon: true, minimized: true);
+            Say("已注册登录自启: " + Autostart.CurrentCommand());
+            Say("  程序路径存在: " + (System.IO.File.Exists(Autostart.ExePath) ? "是" : "否！自启会失败"));
+            if (!System.IO.File.Exists(Autostart.ExePath)) Autostart.Disable();
+            Current?.Shutdown();
+            return;
+        }
+        if (System.Array.Exists(e.Args, a => a == "--autostart-disable"))
+        {
+            Headless = true;
+            Autostart.Disable();
+            Say("已取消登录自启: " + (Autostart.IsEnabled ? "仍然存在（失败）" : "确认已移除"));
+            Current?.Shutdown();
+            return;
+        }
+        if (System.Array.Exists(e.Args, a => a == "--autostart-status"))
+        {
+            Headless = true;
+            Say("登录自启: " + (Autostart.CurrentCommand() ?? "未注册"));
+            Current?.Shutdown();
+            return;
+        }
+
         Shell = new MainWindow
         {
             ShowActivated = !minimized,
