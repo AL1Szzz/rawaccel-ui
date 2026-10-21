@@ -321,18 +321,61 @@ public partial class TestPage : UserControl
                       $"入球用时 {st.TimeToTargetMedian:0}ms；第一下停点 {st.PrimaryRadialMedian:+0.0;-0.0}%" +
                       (st.HitExtentMedian > 0 && st.HitExtentMedian < 95 ? "（路径重建有丢失，最远%只能当下限）" : ""));
         Summary.Text = sb.ToString();
-        Flags.Text = st.Quality.Count == 0 ? "本轮没有质量警告。"
-            : "数据质量警告：\n  · " + string.Join("\n  · ", st.Quality);
+        Flags.Text = st.Notes.Count == 0 ? "本轮没有质量警告。"
+            : "注意点：\n  · " + string.Join("\n  · ", st.Notes.Select(n => n.Zh));
     }
 
-    // ---------- round picker / A-B comparison ----------
+    // ---------- round history / comparison ----------
+
+    /// <summary>One row of the history list. String properties because the GridView binds them.</summary>
+    public sealed class Row
+    {
+        public required RoundSummary S;
+        public string Time
+        {
+            get
+            {
+                // round-2026-10-21_16-57-28-366 -> 10-21 16:57:28 (the file name is the round START)
+                var name = System.IO.Path.GetFileNameWithoutExtension(S.File);
+                if (name.Length < 25) return S.When;
+                string core = name[6..^4];                    // 2026-10-21_16-57-28
+                return core.Length < 21 ? S.When : core[5..10] + " " + core[11..].Replace('-', ':');
+            }
+        }
+        public string Hit => $"{S.HitRate:0.0}%（{S.BallsCleared}/{S.Clicks}）";
+        public string Pace => S.KillsPerMinute > 0 ? $"{S.KillsPerMinute:0.0}" : "—";
+        public string Extent => S.MaxExtentMedian > 0 ? $"{S.MaxExtentMedian:0}%" : "—";
+        public string Sha => S.ConfigSha.Length > 6 ? S.ConfigSha[..6] : S.ConfigSha;
+        public string Warn
+        {
+            get
+            {
+                var bits = new List<string>();
+                int n = S.NotesZh.Count > 0 ? S.NotesZh.Count(x => x.Warn)
+                                            : S.Quality.Count(q => q.StartsWith("IMPLIANT"));
+                if (n > 0) bits.Add(n + "⚠");
+                if (!S.OpenLoopUsable) bits.Add("开环✗");
+                return string.Join(" ", bits);
+            }
+        }
+    }
+
+    RoundSummary? Picked() =>
+        (HistoryList.SelectedItem as Row)?.S
+        ?? TestLog.ReadSummary((CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "");
 
     void FillRounds(bool selectNewest)
     {
-        var rounds = TestLog.Rounds(60);
+        var rounds = TestLog.Rounds(80);
+
+        HistoryList.Items.Clear();
+        foreach (var r in rounds) HistoryList.Items.Add(new Row { S = r });
+        if (HistoryList.Items.Count > 0)
+            HistoryList.SelectedIndex = selectNewest ? 0 : Math.Max(0, HistoryList.Items.Count - 1);
+        GroupCompare.Text = string.Join("\n", History.CompareNewestTwo(rounds));
+
         string keepA = (CmbA.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
         string keepB = (CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
-
         CmbA.Items.Clear();
         CmbB.Items.Clear();
         CmbA.Items.Add(new ComboBoxItem { Content = "（不选）", Tag = "" });
@@ -342,7 +385,7 @@ public partial class TestPage : UserControl
             CmbA.Items.Add(new ComboBoxItem { Content = r.Label(), Tag = r.File });
             CmbB.Items.Add(new ComboBoxItem { Content = r.Label(), Tag = r.File });
         }
-        if (rounds.Count == 0) { Compare.Text = "logs\\ 里还没有 v3 日志。"; return; }
+        if (rounds.Count == 0) { Compare.Text = "logs\\ 里还没有日志。"; return; }
 
         void Pick(ComboBox box, string keep, int fallbackIndex)
         {
@@ -363,35 +406,85 @@ public partial class TestPage : UserControl
         }
     }
 
+    void OnHistorySelect(object sender, SelectionChangedEventArgs e)
+    {
+        if (HistoryDetail == null) return;   // fires during InitializeComponent
+        if (HistoryList.SelectedItem is not Row row) { HistoryDetail.Visibility = Visibility.Collapsed; return; }
+        var s = row.S;
+        HistoryDetail.Visibility = Visibility.Visible;
+
+        string cond = $"{s.Mode} · {s.DistancePx:0}px · {s.TargetCount}球 · 球半径 {s.RadiusPx:0}px";
+        DetailHead.Text = $"{row.Time}   {cond}\n" +
+                          $"点掉 {s.BallsCleared}/{s.Clicks}（{s.HitRate:0.0}%） · 节奏 {s.KillsPerMinute:0.0} 球/分 · " +
+                          $"径向中位 {s.RadialMedian:+0.0;-0.0}%（MAE {s.RadialMae:0.0}、sd {s.RadialSd:0.0}） · " +
+                          $"单发中位 {s.TimeMedian:0}ms";
+        if (!s.OpenLoopUsable)
+            DetailOpen.Text = "开环：这轮来自旧构建（路径重建有已知问题），开环数字不可用，别用它判断参数。";
+        else if (s.MaxExtentMedian > 0)
+            DetailOpen.Text = $"开环：甩动最远冲到 {s.MaxExtentMedian:0}%（{s.Overshoot2} 次整体飞出球面） · " +
+                              $"入球用时中位 {s.TimeToTargetMedian:0}ms（>100% = 甩过头，这是判增益改动的第一尺子）";
+        else
+            DetailOpen.Text = "开环：这版日志没有开环字段。";
+
+        var notes = new List<(string text, bool warn)>();
+        notes.AddRange(s.NotesZh);
+        if (notes.Count == 0 && s.Quality.Count > 0)
+        {
+            notes.AddRange(s.Quality.Select(q => ("（旧版日志只有英文）" + q, q.StartsWith("IMPLIANT"))));
+        }
+        NotesList.Children.Clear();
+        foreach (var n in notes)
+            NotesList.Children.Add(new TextBlock
+            {
+                Text = "· " + n.text,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12,
+                Margin = new Thickness(0, 2, 0, 2),
+                Foreground = new SolidColorBrush(n.warn ? Color.FromRgb(0xFF, 0xC2, 0x4C)
+                                                        : Color.FromRgb(0x9A, 0x9A, 0x9A)),
+            });
+        NotesExpander.Visibility = notes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        NotesHeader.Text = notes.Count == 0 ? "没有注意点" : $"注意点（{notes.Count}）";
+    }
+
+    void OnCleanup(object sender, RoutedEventArgs e)
+    {
+        var rounds = TestLog.Rounds(300);
+        if (rounds.Count == 0) { App.State.Status = "没有可清理的日志。"; return; }
+        var w = new CleanupWindow(rounds) { Owner = Window.GetWindow(this) };
+        w.Changed += () => { FillRounds(selectNewest: false); ShowSummary(); };
+        w.ShowDialog();
+    }
+
     void OnUseBAsCurrent(object sender, RoutedEventArgs e)
     {
-        var b = (CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
-        if (b.Length == 0) { App.State.Status = "先在 B 里选一轮"; return; }
-        roundId = System.IO.Path.GetFileNameWithoutExtension(b);
-        logPath = b;
-        LogInfo.Text = "已把 B 作为当前轮：" + System.IO.Path.GetFileName(b);
+        var s = Picked();
+        if (s == null || !System.IO.File.Exists(s.File)) { App.State.Status = "先在列表里选一轮"; return; }
+        roundId = System.IO.Path.GetFileNameWithoutExtension(s.File);
+        logPath = s.File;
+        LogInfo.Text = "已把选中轮作为当前轮：" + System.IO.Path.GetFileName(s.File);
         App.State.Status = "粘贴 AI 方案时会按这一轮校验 round";
     }
 
     void OnCopySelected(object sender, RoutedEventArgs e)
     {
-        var f = (CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
+        var s = Picked();
         try
         {
-            if (f.Length == 0 || !System.IO.File.Exists(f)) { App.State.Status = "先在 B 里选一轮日志"; return; }
-            Clipboard.SetText(System.IO.File.ReadAllText(f));
-            App.State.Status = "已复制 " + System.IO.Path.GetFileName(f) + "，直接贴给 AI";
+            if (s == null || !System.IO.File.Exists(s.File)) { App.State.Status = "先在列表里选一轮日志"; return; }
+            Clipboard.SetText(System.IO.File.ReadAllText(s.File));
+            App.State.Status = "已复制 " + System.IO.Path.GetFileName(s.File) + "，直接贴给 AI";
         }
         catch (Exception ex) { App.State.Status = "复制失败：" + ex.Message; }
     }
 
     void OnOpenSelected(object sender, RoutedEventArgs e)
     {
-        var f = (CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
+        var s = Picked();
         try
         {
-            if (f.Length == 0 || !System.IO.File.Exists(f)) { OpenDir(); return; }
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = f, UseShellExecute = true });
+            if (s == null || !System.IO.File.Exists(s.File)) { OpenDir(); return; }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = s.File, UseShellExecute = true });
         }
         catch (Exception ex) { App.State.Status = "打不开日志：" + ex.Message; }
     }

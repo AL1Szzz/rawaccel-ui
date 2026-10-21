@@ -52,12 +52,21 @@ public sealed class RoundStats
     public int OvershootCount2;
     public double TimeToTargetMedian, OnsetMedianMs;
     public double PeakMedianWhenMeasured;
-    public List<string> Quality = new();
+
+    /// <summary>One data-quality remark in both languages: the log file carries the English
+    /// text (it is the assistant's interface), the UI shows the Chinese one. Both are produced
+    /// together so neither can drift from the other.</summary>
+    public sealed record QualityNote(string En, string Zh, bool Warn);
+    public List<QualityNote> Notes = new();
+    /// <summary>English-only view, exactly what the log file and older tests expect.</summary>
+    public List<string> Quality => Notes.Select(n => n.En).ToList();
+
+    void Note(string en, string zh, bool warn = false) => Notes.Add(new QualityNote(en, zh, warn));
 
     public static RoundStats Compute(IReadOnlyList<Trial> t, double radiusPx, double targetDistancePx, double radialTolPct = 5)
     {
         var s = new RoundStats();
-        if (t.Count == 0) { s.Quality.Add("no trials recorded"); return s; }
+        if (t.Count == 0) { s.Note("no trials recorded", "没有记录到任何试次"); return s; }
 
         s.Count = t.Count;
         s.Clicks = t.Count;
@@ -147,9 +156,11 @@ public sealed class RoundStats
             {
                 double m = Median(hitPrim.Select(x => x.MaxExtentPct).ToList());
                 if (m < 95)
-                    s.Quality.Add($"IMPLIANT: {hitPrim.Count} flicks ended on the ball yet their reconstructed path " +
+                    s.Note($"IMPLIANT: {hitPrim.Count} flicks ended on the ball yet their reconstructed path " +
                                   $"only reached {m:0}% of the distance - the reconstruction is losing pointer travel, " +
-                                  "so max_extent/prim numbers this round are lower bounds, not measurements");
+                                  "so max_extent/prim numbers this round are lower bounds, not measurements",
+                           $"命中球的甩动里，重建路径只到点击距离的 {m:0}% —— 重建丢了行程，" +
+                           "这轮的 max_extent/prim 数字只能当下限看，不能当测量值", warn: true);
                 s.HitExtentMedian = m;
             }
             var ttt = prim.Where(x => !double.IsNaN(x.TimeToTargetMs)).Select(x => x.TimeToTargetMs).ToList();
@@ -169,36 +180,52 @@ public sealed class RoundStats
 
         // ---- what the reader must not assume ----
         if (s.RetryCount > 0)
-            s.Quality.Add($"{s.RetryCount} clicks were immediate retries of the ball just missed " +
-                          "(<150px, same target): the distance buckets exclude them");
+            s.Note($"{s.RetryCount} clicks were immediate retries of the ball just missed " +
+                          "(<150px, same target): the distance buckets exclude them",
+                   $"{s.RetryCount} 次是打偏后对同一个球的立即补枪（<150px）：距离分桶里已剔除这些");
         if (s.EmptyClickCount > 0)
-            s.Quality.Add($"{s.EmptyClickCount}/{s.Count} clicks landed on no ball and were attributed to the nearest " +
-                          $"one; treat those rows as misses, not as hitting the wrong ball");
+            s.Note($"{s.EmptyClickCount}/{s.Count} clicks landed on no ball and were attributed to the nearest " +
+                          $"one; treat those rows as misses, not as hitting the wrong ball",
+                   $"{s.EmptyClickCount}/{s.Count} 次点击没落在任何球上，按最近的球计分：这些算脱靶，不是打错球");
         if (s.PrimaryCount == 0)
-            s.Quality.Add("no flick had enough input windows to reconstruct its initial impulse: the open-loop " +
-                          "columns are empty for this round");
+            s.Note("no flick had enough input windows to reconstruct its initial impulse: the open-loop " +
+                          "columns are empty for this round",
+                   "没有一发甩动有足够的输入窗口来重建初始冲量：这轮的开环列是空的");
         else if (s.PrimaryCount < s.Count / 2)
-            s.Quality.Add($"only {s.PrimaryCount}/{s.Count} flicks could be reconstructed for the open-loop measure");
+            s.Note($"only {s.PrimaryCount}/{s.Count} flicks could be reconstructed for the open-loop measure",
+                   $"只有 {s.PrimaryCount}/{s.Count} 发甩动够数据重建开环冲量");
         if (Math.Abs(s.PrimaryRadialMedian) > 5 && s.PrimaryCount >= 12)
-            s.Quality.Add($"the initial impulse itself lands {(s.PrimaryRadialMedian > 0 ? "past" : "short of")} the " +
+            s.Note($"the initial impulse itself lands {(s.PrimaryRadialMedian > 0 ? "past" : "short of")} the " +
                           $"target ({s.PrimaryRadialMedian:+0.0;-0.0}% median, {s.PrimaryOver} over / {s.PrimaryUnder} under): " +
-                          "that is a gain effect, not correction noise");
+                          "that is a gain effect, not correction noise",
+                   $"第一下冲量本身{(s.PrimaryRadialMedian > 0 ? "飞过头" : "没够到")}目标（中位 {s.PrimaryRadialMedian:+0.0;-0.0}%，" +
+                   $"{s.PrimaryOver} 过 / {s.PrimaryUnder} 不及）：这是增益效应，不是修正噪声");
         if (Math.Abs(s.RadialMean) < s.RadialSd && s.OvershootCount >= 2 && s.UndershootCount >= 2)
-            s.Quality.Add($"signed radial mean {s.RadialMean:+0.0;-0.0}% averages {s.OvershootCount:0} overshoots with " +
-                          $"{s.UndershootCount:0} undershoots (sd {s.RadialSd:0.0}%); it is NOT evidence of a bias");
-        if (s.Count < 12) s.Quality.Add($"only {s.Count} clicks recorded ({s.BallsCleared} balls cleared): below ~12 a single parameter change is not supportable");
+            s.Note($"signed radial mean {s.RadialMean:+0.0;-0.0}% averages {s.OvershootCount:0} overshoots with " +
+                          $"{s.UndershootCount:0} undershoots (sd {s.RadialSd:0.0}%); it is NOT evidence of a bias",
+                   $"径向带符号均值 {s.RadialMean:+0.0;-0.0}% 是 {s.OvershootCount:0} 次过头和 {s.UndershootCount:0} 次不及互相抵消" +
+                   $"（sd {s.RadialSd:0.0}%），不能当存在偏移的证据");
+        if (s.Count < 12)
+            s.Note($"only {s.Count} clicks recorded ({s.BallsCleared} balls cleared): below ~12 a single parameter change is not supportable",
+                   $"只记录了 {s.Count} 次点击（点掉 {s.BallsCleared} 个球）：少于 ~12 次，撑不起一个参数结论");
         if (s.MeasuredCount < s.Count)
-            s.Quality.Add($"post-driver speed present for {s.MeasuredCount}/{s.Count} trials; peak 0 means no packets " +
-                          "landed in that window, not a still hand");
-        if (s.TruncatedCount > 0) s.Quality.Add($"{s.TruncatedCount} trial windows were trimmed out of the ring buffer");
+            s.Note($"post-driver speed present for {s.MeasuredCount}/{s.Count} trials; peak 0 means no packets " +
+                          "landed in that window, not a still hand",
+                   $"{s.MeasuredCount}/{s.Count} 次点击采到了驱动后速度；峰值为 0 是那个窗口没收到包，不代表手没动");
+        if (s.TruncatedCount > 0)
+            s.Note($"{s.TruncatedCount} trial windows were trimmed out of the ring buffer",
+                   $"{s.TruncatedCount} 个试次的速度窗口被环形缓冲挤掉了");
         if (s.Buckets.Count < 2)
-            s.Quality.Add("this round only produced one distance bucket: it cannot say anything about " +
-                          "small flicks vs large turns separately");
+            s.Note("this round only produced one distance bucket: it cannot say anything about " +
+                          "small flicks vs large turns separately",
+                   "这轮只有一个距离桶：分不出小幅定位和大幅转身各自的水平");
         if (s.DistanceMax - s.DistanceMin < 1)
-            s.Quality.Add("all targets shared one distance: this round cannot separate small from large flicks");
+            s.Note("all targets shared one distance: this round cannot separate small from large flicks",
+                   "这轮所有目标距离都一样：分不出小幅和大幅甩动");
         if (radiusPx > 0 && s.TangMeanAbs > radiusPx * 1.5)
-            s.Quality.Add($"mean |tangential| {s.TangMeanAbs:0}px is far larger than the {radiusPx:0}px target: " +
-                          "the pointer rarely arrived where it was aimed, so amplitude conclusions are unreliable");
+            s.Note($"mean |tangential| {s.TangMeanAbs:0}px is far larger than the {radiusPx:0}px target: " +
+                          "the pointer rarely arrived where it was aimed, so amplitude conclusions are unreliable",
+                   $"平均 |切向| {s.TangMeanAbs:0}px 远超 {radiusPx:0}px 的球半径：指针经常没到瞄准的地方，幅度类结论不可靠");
         return s;
     }
 

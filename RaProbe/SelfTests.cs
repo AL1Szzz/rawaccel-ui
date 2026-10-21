@@ -59,6 +59,9 @@ public static class SelfTests
         Console.WriteLine("\n== K. Device entries through the driver blob and settings.json ==");
         Section("devices", DeviceWire);
 
+        Console.WriteLine("\n== L. History groups, noise verdicts, archive round trip ==");
+        Section("history", HistoryChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -811,5 +814,122 @@ public static class SelfTests
             TestLog.IndexOverride = null;
             try { Directory.Delete(dir, true); } catch { }
         }
+    }
+
+    // ---------- L ----------
+
+    static RoundSummary RS(string file, string sha, string mode, double dist, int balls, string when,
+                           double hit, double pace, double rad, double maxExtent = 0, int clicks = 60) =>
+        new()
+        {
+            File = file, ConfigSha = sha, Mode = mode, DistancePx = dist, TargetCount = balls,
+            When = when, HitRate = hit, KillsPerMinute = pace, RadialMedian = rad,
+            MaxExtentMedian = maxExtent, Clicks = clicks, BallsCleared = (int)Math.Round(clicks * hit / 100.0),
+        };
+
+    static void HistoryChecks()
+    {
+        // grouping: newest group first, medians are true medians
+        var rounds = new List<RoundSummary>
+        {
+            RS("a1", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-21 16:56:48", 69.8, 88.8, +0.4),
+            RS("a2", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-21 16:57:28", 70.0, 97.9, +0.0),
+            RS("a3", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-21 16:58:05", 76.1, 102.0, +0.3),
+            RS("b1", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-20 23:31:00", 60.0, 84.0, +0.1),
+            RS("b2", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-20 23:32:00", 64.0, 86.0, +0.2),
+            RS("b3", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-20 23:33:00", 68.0, 88.0, +0.9),
+        };
+        var groups = History.Group(rounds);
+        Check(groups.Count == 2 && groups[0].Sha == "aaaaaaaa11" && groups[0].Rounds.Count == 3,
+            "rounds group by config+setup, newest group first");
+        Check(Math.Abs(groups[0].MedianHit - 70.0) < 0.01 && Math.Abs(groups[1].MedianHit - 64.0) < 0.01,
+            $"group medians are true medians ({groups[0].MedianHit:0.0} / {groups[1].MedianHit:0.0})");
+
+        // config actually changed, difference beyond the noise floor -> say so, ask for confirmation
+        var v = History.CompareNewestTwo(rounds);
+        Check(v.Any(l => l.Contains("aaaaaa")) && v.Any(l => l.Contains("bbbbbb")), "both groups are described");
+        Check(v.Any(l => l.Contains("超过了噪声底")), $"a +6pp hit jump is called beyond the noise floor: {string.Join(" | ", v)}");
+        Check(v.Any(l => l.Contains("差值来自这次改动")), "same-conditions groups attribute the difference to the change");
+
+        // difference inside the noise floor -> no claim
+        rounds[0].HitRate = 65.0; rounds[1].HitRate = 65.5; rounds[2].HitRate = 66.0;    // median 65.5
+        var v2 = History.CompareNewestTwo(rounds);
+        Check(v2.Any(l => l.Contains("测不出差别")), "a +1.5pp move stays inside the noise floor and claims nothing");
+
+        // same config on both sides -> drift, not effect
+        var drift = rounds.Select(r => { r.ConfigSha = "aaaaaaaa11"; return r; }).ToList();
+        var v3 = History.CompareNewestTwo(drift);
+        Check(v3.Any(l => l.Contains("状态波动")) && !v3.Any(l => l.Contains("超过了噪声底")),
+            "same-sha groups are labelled as state drift, never as a parameter effect");
+
+        // confounded conditions -> not attributable
+        var conf = new List<RoundSummary>(rounds) { [2] = RS("a3", "cccccccc33", "30 秒限时", 420, 26, "2026-10-21 16:58:05", 76, 102, 0.3) };
+        var v4 = History.CompareNewestTwo(conf);
+        Check(v4.Any(l => l.Contains("不能全归因")), "a setup change between groups kills the attribution");
+
+        // open-loop availability marker
+        var stale = new RoundSummary { File = "x", ConfigSha = "a", Quality = { "IMPLIANT: 49 flicks ended on the ball yet their reconstructed path only reached 82% of the distance - the reconstruction is losing pointer travel, so max_extent/prim numbers this round are lower bounds" } };
+        var stale2 = new RoundSummary { File = "y", ConfigSha = "a", Quality = { "IMPLIANT: 59 flicks had no second surge yet their initial impulse is reported -26.0% off the target" } };
+        var fresh = new RoundSummary { File = "z", ConfigSha = "a" };
+        Check(!stale.OpenLoopUsable && !stale2.OpenLoopUsable && fresh.OpenLoopUsable,
+            "both broken-build eras are recognised by their guard texts; a clean round is usable");
+
+        // ---- archive round trip: files move, index stays consistent, nothing is deleted ----
+        var dir = Path.Combine(Path.GetTempPath(), "raui-archtest-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        TestLog.IndexOverride = dir;
+        try
+        {
+            var f1 = Path.Combine(dir, "round-arch-1.log");
+            var f2 = Path.Combine(dir, "round-arch-2.log");
+            File.WriteAllText(f1, "log one");
+            File.WriteAllText(f2, "log two");
+            var idx = Path.Combine(dir, "index.csv");
+            File.WriteAllLines(idx, new[]
+            {
+                "file;when;configSha",
+                "round-arch-1.log;2026-10-20 23:31:00;aaaaaaaa11",
+                "round-arch-2.log;2026-10-21 16:56:48;aaaaaaaa11",
+                "round-gone.log;2026-10-19 10:00:00;aaaaaaaa11",   // dangling from an older manual delete
+            });
+
+            var res = LogArchive.Archive(new[] { f1, Path.Combine(dir, "missing.log") });
+            Check(res.Moved == 1 && res.Failed.Count == 1, $"one file moved, the missing one is reported: {res.Moved} moved / {res.Failed.Count} failed");
+            Check(!File.Exists(f1), "the archived file is gone from logs\\");
+            var archived = Path.Combine(res.ArchiveDir, "round-arch-1.log");
+            Check(File.Exists(archived) && File.ReadAllText(archived) == "log one",
+                "and it is recoverable in the archive folder");
+            Check(File.Exists(f2), "the file that was not selected stays put");
+            var lines = File.ReadAllLines(idx);
+            Check(lines.Length == 2 && lines[1].StartsWith("round-arch-2.log"),
+                $"index.csv kept only the row whose file still exists ({string.Join(" / ", lines.Skip(1))}) - the dangling row went too");
+        }
+        finally
+        {
+            TestLog.IndexOverride = null;
+            try { Directory.Delete(dir, true); } catch { }
+        }
+
+        // ---- bilingual notes: generated together, so neither language can drift ----
+        var st = RoundStats.Compute(new List<Trial>
+        {
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 71, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 69, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 71, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
+            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
+        }, 26, 700);
+        Check(st.Notes.Count == st.Quality.Count && st.Notes.All(n => n.Zh.Length > 0),
+            $"every quality note has both languages ({st.Notes.Count} notes)");
+        var guard = st.Notes.FirstOrDefault(n => n.Warn);
+        Check(guard != null && guard.Zh.Contains("行程") && guard.En.Contains("losing pointer travel"),
+            "the travel guard speaks both languages");
+        Check(st.Notes.Any(n => !n.Warn && n.Zh.Contains("距离桶")),
+            $"the one-bucket note is present in Chinese: {string.Join(" | ", st.Notes.Select(n => n.Zh))}");
+        Check(st.Notes.Any(n => n.Zh.Contains("8 次点击")),
+            "numbers are interpolated into the Chinese text, not just the English one");
     }
 }

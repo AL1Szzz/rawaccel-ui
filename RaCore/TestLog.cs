@@ -59,6 +59,19 @@ public sealed class RoundSummary
     public double TimeMedian;
     public List<string> Quality = new();
 
+    /// <summary>Segmentation-free open-loop medians; 0 when the file predates them.</summary>
+    public double MaxExtentMedian, HitExtentMedian;
+    public int Overshoot2;
+    public double TimeToTargetMedian;
+    /// <summary>Same remarks as Quality, in the language the UI shows. Empty in pre-v3.1 files.</summary>
+    public List<(string Text, bool Warn)> NotesZh = new();
+
+    /// <summary>False for rounds written by builds whose open-loop reconstruction was broken
+    /// (the eras are recognisable by their guard texts, new builds mark it with the guard itself).
+    /// The tuning protocol must not read max_extent/prim from such rounds.</summary>
+    public bool OpenLoopUsable =>
+        !Quality.Any(q => q.Contains("no second surge") || q.Contains("losing pointer travel"));
+
     /// <summary>One readable line for the round picker. Uses the file name (round START, to the
     /// second) because two rounds finished in the same minute and looked identical.</summary>
     public string Label()
@@ -346,6 +359,11 @@ public static class TestLog
                 ["speedMeasuredTrials"] = st.MeasuredCount,
                 ["truncatedTrials"] = st.TruncatedCount,
                 ["qualityFlags"] = st.Quality,
+                ["qualityZh"] = st.Notes.Select(n => new Dictionary<string, object?> { ["t"] = n.Zh, ["warn"] = n.Warn }).ToList(),
+                ["maxExtentMedianPct"] = Round(st.MaxExtentMedian),
+                ["hitExtentMedianPct"] = Round(st.HitExtentMedian),
+                ["overshoot2"] = st.OvershootCount2,
+                ["timeToTargetMedianMs"] = Round(st.TimeToTargetMedian),
             },
             ["openLoop"] = new Dictionary<string, object?>
             {
@@ -472,6 +490,14 @@ public static class TestLog
                 if (s.Trials == 0) s.Trials = (int)D(st, "count");
                 if (st.TryGetProperty("qualityFlags", out var q) && q.ValueKind == JsonValueKind.Array)
                     s.Quality = q.EnumerateArray().Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToList();
+                if (st.TryGetProperty("qualityZh", out var qz) && qz.ValueKind == JsonValueKind.Array)
+                    s.NotesZh = qz.EnumerateArray()
+                        .Select(e => (Str(e, "t"), e.TryGetProperty("warn", out var wv) && wv.ValueKind == JsonValueKind.True))
+                        .Where(x => x.Item1.Length > 0).ToList();
+                s.MaxExtentMedian = D(st, "maxExtentMedianPct");
+                s.HitExtentMedian = D(st, "hitExtentMedianPct");
+                s.Overshoot2 = (int)D(st, "overshoot2");
+                s.TimeToTargetMedian = D(st, "timeToTargetMedianMs");
             }
             return s;
         }

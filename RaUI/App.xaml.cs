@@ -128,6 +128,7 @@ public partial class App : Application
         System.Console.WriteLine($"tray add: {(ok ? "Shell_NotifyIcon accepted" : "FAILED - " + tray.LastError)}");
         System.Console.WriteLine($"tray tip: {tray.TipText}");
         System.Console.WriteLine($"tray art: {icon}");
+        System.Console.WriteLine($"tray menu render: {tray.RenderMenuPng() ?? "FAILED"}");
 
         // give the shell a moment to paint it, then take the icon back down
         w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);

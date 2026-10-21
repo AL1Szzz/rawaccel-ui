@@ -256,9 +256,34 @@ public sealed class TrayIcon : IDisposable
 
     // ---------- menu ----------
 
+    /// <summary>
+    /// Renders the context menu to a PNG without ever opening it on screen - the offscreen
+    /// proof that the palette is readable (this is the check for the white-on-white bug).
+    /// </summary>
+    public string? RenderMenuPng()
+    {
+        try
+        {
+            menu.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+            menu.Arrange(new Rect(new Point(0, 0), menu.DesiredSize));
+            int w = (int)Math.Ceiling(menu.ActualWidth), h = (int)Math.Ceiling(menu.ActualHeight);
+            if (w <= 0 || h <= 0) return $"FAILED (size {w}x{h}, desired {menu.DesiredSize.Width:0}x{menu.DesiredSize.Height:0})";
+            var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(menu);
+            string path = System.IO.Path.Combine(RaCore.AppData.Root, "tray-menu.png");
+            var enc = new PngBitmapEncoder();
+            enc.Frames.Add(BitmapFrame.Create(rtb));
+            using var fs = System.IO.File.Create(path);
+            enc.Save(fs);
+            return path;
+        }
+        catch (Exception e) { return "FAILED: " + e.Message; }
+    }
+
     ContextMenu BuildMenu()
     {
         var m = new ContextMenu { MinWidth = 210 };
+        StyleMenu(m);
         m.Items.Add(Item("显示 / 隐藏主界面", () => ToggleWindow()));
         m.Items.Add(Item("立即把设置写入驱动", () => _ = state.WriteToDriverAsync()));
         m.Items.Add(new Separator());
@@ -287,9 +312,65 @@ public sealed class TrayIcon : IDisposable
         return m;
     }
 
+    /// <summary>
+    /// The tray window is invisible, so the menu inherits nothing useful from it: the WPF
+    /// defaults are a light menu background while the text colour lands on white - white on
+    /// white, exactly what was reported. Pin the whole palette explicitly, dark like the app.
+    /// </summary>
+    static void StyleMenu(ContextMenu m)
+    {
+        var bg = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20));
+        var hover = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3A));
+        var border = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x4A));
+        bg.Freeze(); hover.Freeze(); border.Freeze();
+
+        m.Foreground = Brushes.White;
+
+        // Even with Background set, the system ContextMenu template keeps a white icon-gutter
+        // column on the left (part of the default Aero2 chrome). Replace the whole template:
+        // one dark rounded border around the items, nothing else inherited from the theme.
+        var t = new ControlTemplate(typeof(ContextMenu));
+        var bd = new FrameworkElementFactory(typeof(Border));
+        bd.Name = "Bd";
+        bd.SetValue(Border.BackgroundProperty, bg);
+        bd.SetValue(Border.BorderBrushProperty, border);
+        bd.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        bd.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
+        bd.SetValue(Border.PaddingProperty, new Thickness(0, 5, 0, 5));
+        var items = new FrameworkElementFactory(typeof(ItemsPresenter));
+        items.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 0, 2, 0));
+        bd.AppendChild(items);
+        t.VisualTree = bd;
+        m.Template = t;
+
+        // NOT ItemContainerStyle: that one is applied to Separators too and WPF refuses a
+        // MenuItem-typed style on a Separator ("样式不能应用于 Separator 类型"). Each item gets
+        // the style directly instead, and the separator uses the keyed resource style below.
+        menuItemStyle = new Style(typeof(MenuItem));
+        menuItemStyle.Setters.Add(new Setter(MenuItem.BackgroundProperty, Brushes.Transparent));
+        menuItemStyle.Setters.Add(new Setter(MenuItem.ForegroundProperty, Brushes.White));
+        menuItemStyle.Setters.Add(new Setter(MenuItem.PaddingProperty, new Thickness(14, 7, 14, 7)));
+        var hi = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
+        hi.Setters.Add(new Setter(MenuItem.BackgroundProperty, hover));
+        menuItemStyle.Triggers.Add(hi);
+
+        var sep = new Style(typeof(Separator));
+        var rect = new FrameworkElementFactory(typeof(System.Windows.Shapes.Rectangle));
+        rect.SetValue(System.Windows.Shapes.Rectangle.FillProperty, border);
+        rect.SetValue(System.Windows.Shapes.Rectangle.HeightProperty, 1.0);
+        sep.Setters.Add(new Setter(Control.TemplateProperty, new ControlTemplate(typeof(Separator))
+        {
+            VisualTree = rect,
+        }));
+        sep.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(10, 4, 10, 4)));
+        m.Resources[typeof(Separator)] = sep;
+    }
+
+    static Style menuItemStyle = new(typeof(MenuItem));   // shared; StyleMenu rebuilds it once per menu
+
     static MenuItem Item(string header, Action act)
     {
-        var mi = new MenuItem { Header = header };
+        var mi = new MenuItem { Header = header, Style = menuItemStyle };
         mi.Click += (_, _) => act();
         return mi;
     }
