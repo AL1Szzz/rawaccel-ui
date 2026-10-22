@@ -73,7 +73,32 @@ internal static class PollJitter
     static long t0;
     static double freqPerUs;
 
+    /// <summary>
+    /// A diagnostic tool must never die silently. Anything that escapes gets written out in full
+    /// (with line numbers, once the .pdb sits next to the exe) both to the console and to the
+    /// jitter folder, so one run is enough to locate it.
+    /// </summary>
     public static int Run(string[] args)
+    {
+        try { return RunInner(args); }
+        catch (Exception e)
+        {
+            Console.WriteLine("探针自己出错了（测量数据没有丢，是代码问题）：");
+            Console.WriteLine(e);
+            try
+            {
+                var dir = Path.Combine(AppData.Root, "jitter");
+                Directory.CreateDirectory(dir);
+                var txt = Path.Combine(dir, "CRASH-" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
+                File.WriteAllText(txt, string.Join(Environment.NewLine, report) + Environment.NewLine + e);
+                Console.WriteLine("已写: " + txt);
+            }
+            catch (Exception e2) { Console.WriteLine("连崩溃日志都没写成: " + e2.Message); }
+            return 1;
+        }
+    }
+
+    static int RunInner(string[] args)
     {
         int seconds = 20;
         int si = Array.FindIndex(args, a => a == "--seconds");
@@ -89,6 +114,25 @@ internal static class PollJitter
         string settingsPath = @"D:\RawAccel\settings.json";
         int pi = Array.FindIndex(args, a => a == "--settings");
         if (pi >= 0 && pi + 1 < args.Length) settingsPath = args[pi + 1];
+
+        // --synthetic runs the whole analysis on a made-up packet stream: no hand, no console
+        // quirks. It is what makes this tool testable, and it is how a crash that only appears
+        // once there is data can be reproduced at all.
+        if (args.Contains("--synthetic"))
+        {
+            Say($"合成数据自检（settings = {settingsPath}）");
+            long t = 0;
+            var rnd = new Random(7);
+            for (int i = 0; i < 4000; i++)
+            {
+                t += i % 5 == 0 ? 1500 : 500;                       // 20% of packets 3x late
+                if (i % 200 == 0) t += 30_000;                        // plus real pauses: must not be priced
+                int d = 3 + rnd.Next(0, 9);
+                pkts.Add(new Pkt(t, d, d / 2));
+            }
+            Analyze(2.0, settingsPath);
+            return 0;
+        }
 
         var sw0 = Stopwatch.StartNew();
         t0 = sw0.ElapsedTicks;
@@ -220,7 +264,7 @@ internal static class PollJitter
         // the last output - that is what the driver applies in the middle of a moving flick.
         double GainX(double speed)
         {
-            if (speed <= 0) return 1;
+            if (speed < 1e-3) return 1;      // a stationary pointer has no curve to consult
             var mod = new Modifier(new ModifierSettings(prof));
             var sp = new SpeedProcessor();
             sp.Init(prof.speed_processor_args);
@@ -230,6 +274,12 @@ internal static class PollJitter
             return last;
         }
 
+        // Only plausible polling gaps may price the curve. A 30ms gap means the hand stopped, not
+        // that a packet was late; feeding it through gain() asks the model about a near-stationary
+        // pointer, which is meaningless for the statistics and a path that can throw.
+        var price = dt.FindAll(d => d <= 5_000);
+        if (price.Count < 20) price = dt;
+
         // The driver derives speed = counts / measured time, so a packet that arrives k times late
         // is read as a hand moving k times slower, and the gain is whatever the curve says at that
         // (wrong) speed. This prices exactly that, per representative true input speed.
@@ -237,14 +287,14 @@ internal static class PollJitter
         foreach (double s in new[] { 2.0, 4.0, 6.0, 8.0, 12.0, 16.0 })   // 2 is below the X offset: must stay 1.000x
         {
             double ideal = GainX(s), sum = 0; int bad = 0;
-            foreach (double d in dt)
+            foreach (double d in price)
             {
                 double g = GainX(s * med / d);
                 sum += g;
                 if (g < ideal * 0.95) bad++;
             }
-            double avg = sum / dt.Count;
-            cells.Add(new Cell(s, ideal, avg, 100 * (avg / ideal - 1), 100.0 * bad / dt.Count));
+            double avg = sum / price.Count;
+            cells.Add(new Cell(s, ideal, avg, 100 * (avg / ideal - 1), 100.0 * bad / price.Count));
         }
 
         return new JitterReport(list.Count, dt.Count, med, Q(0.9), Q(0.99), dt[^1], 1_000_000.0 / med,
@@ -279,7 +329,7 @@ internal static class PollJitter
         Say("  真实输入速度   理想增益    抖动下平均增益    平均损失   损失>5%的包");
         foreach (var c in r.Gain)
             Say($"   {c.Speed,4:0} c/ms     {c.Ideal,7:0.000}      {c.Avg,7:0.000}      " +
-                              $"{c.LossPct,+6:0.1}%   {c.BadPct,5:0.0}%");
+                              $" {c.LossPct,6:+0.0;-0.0}%   {c.BadPct,6:0.0}%");
         Say();
         Say("注：这是用户态时间戳，含本进程调度抖动，驱动看不到那部分 —— 当作上界看；");
         Say("    但「空载 vs 开游戏」两次对比是公平的，偏差两边一样。");

@@ -143,6 +143,14 @@ public static class SelfTests
         Check(rec.IsTruncated(old) && win.Count is > 0 and <= 10,
             $"ring overflow is detected (truncated={rec.IsTruncated(old)}, kept {win.Count}/60)");
 
+        // the curve page polls a counter to decide "did anything arrive since the last repaint".
+        // Count is pinned at Capacity from here on, so it cannot be that counter - the live speed
+        // overlay froze after ~2 minutes of movement exactly because it was.
+        long pinnedWindows = rec.Windows;
+        for (int i = 0; i < 30; i++) { clock += 3; rec.Feed(1, 0); }
+        Check(rec.Count == 10 && rec.Windows >= pinnedWindows + 30,
+            $"a full ring buffer still reports arrivals: Count stuck at {rec.Count}, Windows +{rec.Windows - pinnedWindows}");
+
         // Clear() must not make an old mark suddenly mean "everything"
         rec.Clear();
         Check(rec.IsTruncated(old), "after Clear() an old mark still reads as truncated");
@@ -1165,6 +1173,15 @@ public static class SelfTests
             var sparse = LossAt(10); var thick = LossAt(4);
             Check(sparse < 0 && thick < sparse,
                 $"the loss scales with how many packets are late: 10% late {sparse:0.0}%, 25% late {thick:0.0}%");
+
+            // a 30ms gap is the hand stopping, not a late packet. It belongs in the timing stats
+            // but must never be priced as jitter - it would ask the curve about a near-stationary
+            // pointer and blame the result on the driver.
+            var pauses = Rhythm(Enumerable.Range(0, 400).Select(i => i % 20 == 0 ? 30_000.0 : 500.0).ToArray());
+            var withPauses = PollJitter.Measure(pauses, file)!;
+            Check(withPauses.Slow50 > 3, $"the pauses show up in the timing stats ({withPauses.Slow50:0.0}% over 5x)");
+            Check(withPauses.Gain.All(g => Math.Abs(g.LossPct) < 1e-9),
+                $"but they are not priced as jitter: gain loss stays {withPauses.Gain[3].LossPct:0.000}%");
 
             Check(PollJitter.Measure(Rhythm(Enumerable.Repeat(500.0, 10).ToArray()), file) == null,
                 "a stream too short to say anything is refused instead of guessed");
