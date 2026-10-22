@@ -598,6 +598,17 @@ public static class SelfTests
             $"round-level entry time median {st.TimeToTargetMedian:0}ms");
         Check(st.Count == 40 && st.BallsCleared >= 30, $"simulated round scored {st.BallsCleared}/{st.Count} clicks");
 
+        // 4b) and the round must really aim in many directions, because the whole point of the
+        //     simulator is to catch curve effects that only appear off-axis. Until the generated
+        //     path was rotated into the aim direction, diagonal trials reported extents like 0% and
+        //     114% - the generator's own skew, not the driver's.
+        int diagonal = round.Count(x => Math.Abs(Math.Sin(x.AngleRad)) > 0.35 && Math.Abs(Math.Cos(x.AngleRad)) > 0.35);
+        Check(diagonal >= 15, $"the simulated round really spreads its aim directions ({diagonal}/{round.Count} diagonal)");
+        var diagExtent = round.Where(x => Math.Abs(Math.Sin(x.AngleRad)) > 0.35 && Math.Abs(Math.Cos(x.AngleRad)) > 0.35
+                                          && x.HasPrimary).Select(x => x.MaxExtentPct).ToList();
+        Check(diagExtent.Count > 8 && diagExtent.Average() is > 96 and < 106,
+            $"diagonal flicks recover the injected extent as well as straight ones ({diagExtent.Average():0.0}% over n={diagExtent.Count})");
+
         // 5) the metric that the whole tuning protocol rests on must be blind to nothing:
         //    a systematically-overshooting round has to show it, a clean one must not
         var hot = Simulator.Round(40, dist, 6.0, 1.12, seed: 91);

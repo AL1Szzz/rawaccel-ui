@@ -119,6 +119,36 @@ public static class Simulator
     }
 
     /// <summary>
+    /// Turn the generated along-x flick into the aim direction. Before this, the path always left
+    /// the origin horizontally while the target sat at a random angle, so every off-axis number the
+    /// round produced was an artifact of the generator rather than of the curve - and the
+    /// out-of-bounds fallback pinned most trials to exactly 0 degrees anyway.
+    /// Rounding to whole counts is the same quantisation a real device has.
+    /// </summary>
+    static List<MouseSample> Rotate(List<MouseSample> path, double angle)
+    {
+        double c = Math.Cos(angle), s = Math.Sin(angle);
+        var outPath = new List<MouseSample>(path.Count);
+        foreach (var m in path)
+            outPath.Add(new MouseSample((int)Math.Round(m.dx * c - m.dy * s),
+                                        (int)Math.Round(m.dx * s + m.dy * c),
+                                        m.dtMs, m.timeMs, m.seq));
+        return outPath;
+    }
+
+    /// <summary>A random aim direction whose target still fits on the screen.</summary>
+    static double PickAngle(Random rng, double ox, double oy, double dist)
+    {
+        for (int tries = 0; tries < 24; tries++)
+        {
+            double a = rng.NextDouble() * 2 * Math.PI;
+            double tx = ox + Math.Cos(a) * dist, ty = oy + Math.Sin(a) * dist;
+            if (tx >= 60 && tx <= 3380 && ty >= 140 && ty <= 1380) return a;
+        }
+        return 0.17;      // a screen too small for any diagonal: still not exactly on the axis
+    }
+
+    /// <summary>
     /// A whole round of synthetic trials at a fixed distance, written through the real
     /// TestLog path so the log format itself is exercised without a human.
     /// </summary>
@@ -130,28 +160,28 @@ public static class Simulator
         double ox = originX, oy = originY;
         for (int i = 0; i < trials; i++)
         {
-            double angle = rng.NextDouble() * 2 * Math.PI;
+            double angle = PickAngle(rng, ox, oy, distancePx);
             double tx = ox + Math.Cos(angle) * distancePx, ty = oy + Math.Sin(angle) * distancePx;
-            if (tx < 60 || tx > 3380 || ty < 140 || ty > 1380) { tx = ox + distancePx; ty = oy; }
 
             // vary the primary extent around the requested value so the metrics have a spread
             double f = primaryFraction * (0.85 + rng.NextDouble() * 0.3);
             var f1 = Flick1(distancePx, peakCms * (0.85 + rng.NextDouble() * 0.3), f, seed * 31 + i,
                              emptyWindowRate: 0.18);
+            var path = Rotate(f1.Path, angle);
             double ax = (tx - ox) / distancePx, ay = (ty - oy) / distancePx;
             double clickAlong = distancePx;                      // the correction lands on the target
             var (radial, tang, err, pct) = TargetLayout.Score(ox + ax * clickAlong, oy + ay * clickAlong, ox, oy, tx, ty);
 
-            var prim = OpenLoop.Analyze(f1.Path, ox, oy, tx, ty, ox + ax * clickAlong, oy + ay * clickAlong, 26);
+            var prim = OpenLoop.Analyze(path, ox, oy, tx, ty, ox + ax * clickAlong, oy + ay * clickAlong, 26);
             list.Add(new Trial
             {
                 DistancePx = distancePx,
                 AngleRad = Math.Atan2(ay, ax),
-                StartMs = f1.StartMs, EndMs = f1.Path[^1].timeMs,
+                StartMs = f1.StartMs, EndMs = path[^1].timeMs,
                 OriginX = ox, OriginY = oy, TargetX = tx, TargetY = ty,
                 ClickX = ox + ax * clickAlong, ClickY = oy + ay * clickAlong,
                 RadialPx = radial, TangentialPx = tang, RadialPct = pct, ErrorPx = err,
-                Hit = err <= 26, PeakSpeed = f1.PeakCms, SampleCount = f1.Path.Count,
+                Hit = err <= 26, PeakSpeed = f1.PeakCms, SampleCount = path.Count,
                 TargetId = 1, VisibleTargets = 1, BallUnderCursor = err <= 26,
                 HasPrimary = prim != null,
                 PrimaryRadialPx = prim?.RadialPx ?? 0, PrimaryTangentialPx = prim?.TangentialPx ?? 0,
