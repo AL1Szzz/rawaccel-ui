@@ -1,0 +1,13 @@
+{
+  "kind": "raui.tune-patch",
+  "schema": 1,
+  "round": "round-2026-10-23_00-01-03-014",
+  "baseConfig": "06a7469472b7",
+  "profile": "default",
+  "note": "压枪实测手速中位 0.38-0.49 counts/ms，Y 阈值 2.5 时全程增益恰好 1；降到 0.75 也只有 p90 +2.7%，A/B/A 判不出来。速度型 accel 给不了慢速下压的加速，改用手速无关的垂直输出倍率 1.25，等效垂直灵敏度 1.5 到 1.875，水平不动。只改这一个值。",
+  "changes": {
+    "profile": {
+      "yxRatio": 1.25
+    }
+  }
+}

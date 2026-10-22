@@ -1,0 +1,9 @@
+{
+  "name": "raui-field",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "dependencies": {
+    "@laihoe/demoparser2": "^0.42.0"
+  }
+}
