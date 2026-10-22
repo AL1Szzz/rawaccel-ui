@@ -24,7 +24,12 @@ public readonly record struct PrimaryImpulse(
     // The raw pieces of the fit. Averaging per-flick slopes is NOT a valid estimator: a nearly
     // axis-aligned flick divides by almost nothing, so its ratio can be anything and one such
     // sample drags the mean. The round pools these and fits once instead.
-    double AsymNum, double AsymDen);
+    double AsymNum, double AsymDen,
+    // How much the reconstructed count-path had to be stretched to match the real pointer
+    // displacement. 1 = the counts already equalled the pixels. This used to survive only as a
+    // boolean for |k| outside [0.8, 1.25], which meant a round could not show HOW much of the
+    // measured path was reconstruction rather than movement.
+    double ScaleK = 1);
 
 public static class OpenLoop
 {
@@ -100,11 +105,13 @@ public static class OpenLoop
         // inside that band, skipped the rescale, and read 82~92% of their true extent (measured:
         // the round guard fired on all 5 real baseline rounds of 2026-10-21 morning).
         bool scaled = false;
+        double scaleK = 1;
         double recon = Math.Sqrt(px[^1] * px[^1] + py[^1] * py[^1]);
         double real = Math.Sqrt(Math.Pow(clickX - originX, 2) + Math.Pow(clickY - originY, 2));
         if (recon > 1 && real > 1)
         {
             double k = real / recon;
+            scaleK = k;
             for (int i = 0; i < px.Length; i++) { px[i] *= k; py[i] *= k; }
             scaled = k is < 0.8 or > 1.25;   // a rescale that is nearly a no-op isn't worth flagging
         }
@@ -213,6 +220,6 @@ public static class OpenLoop
                                   maxAlong / dist * 100.0, maxAlong > dist + reachRadius,
                                   firstIn >= 0 ? samples[firstIn].timeMs - startMs : double.NaN,
                                   samples[onset].timeMs - startMs,
-                                  lateralPath, lateralPath / dist, reversals, perpPeak, asym, num, den);
+                                  lateralPath, lateralPath / dist, reversals, perpPeak, asym, num, den, scaleK);
     }
 }

@@ -395,6 +395,7 @@ public partial class FlickWindow : Window
             trial.PrimaryRadialPct = pm.RadialPct; trial.PrimaryErrorPx = pm.ErrorPx;
             trial.PrimaryTimeMs = pm.TimeMs; trial.PrimaryPeakCms = pm.PeakCms;
             trial.Corrected = pm.Corrected; trial.PrimaryScaled = pm.Scaled;
+            trial.PrimaryScaleK = pm.ScaleK;
             trial.MaxExtentPct = pm.MaxExtentPct; trial.Overshot = pm.Overshot;
             trial.TimeToTargetMs = pm.TimeToTargetMs; trial.OnsetMs = pm.OnsetMs;
             trial.LateralPathPx = pm.LateralPathPx; trial.ArcRatio = pm.ArcRatio;

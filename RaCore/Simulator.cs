@@ -158,6 +158,7 @@ public static class Simulator
                 PrimaryRadialPct = prim?.RadialPct ?? 0, PrimaryErrorPx = prim?.ErrorPx ?? 0,
                 PrimaryTimeMs = prim?.TimeMs ?? 0, PrimaryPeakCms = prim?.PeakCms ?? 0,
                 Corrected = prim?.Corrected ?? false, PrimaryScaled = prim?.Scaled ?? false,
+                PrimaryScaleK = prim?.ScaleK ?? double.NaN,
                 MaxExtentPct = prim?.MaxExtentPct ?? 0, Overshot = prim?.Overshot ?? false,
                 TimeToTargetMs = prim?.TimeToTargetMs ?? double.NaN, OnsetMs = prim?.OnsetMs ?? 0,
                 LateralPathPx = prim?.LateralPathPx ?? 0, ArcRatio = prim?.ArcRatio ?? 0,

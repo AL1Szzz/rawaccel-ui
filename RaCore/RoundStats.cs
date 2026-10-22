@@ -34,6 +34,12 @@ public sealed class RoundStats
     /// <summary>Open-loop view: the endpoint of the FIRST movement. Unlike the click-time error
     /// this cannot be corrected away, so it is the number that responds to a gain change.</summary>
     public int PrimaryCount;
+    /// <summary>How many of the excluded immediate retries also carried a primary impulse - i.e.
+    /// how much the open-loop set shrank once it stopped counting them.</summary>
+    public int PrimaryRetryDropped;
+    /// <summary>Median counts-to-pixels stretch used by the reconstruction. Printed because a
+    /// round whose k sits far from 1 is measuring the rescaling more than the movement.</summary>
+    public double ScaleKMedian = double.NaN;
     public int CorrectedCount;
     public double PrimaryRadialMedian, PrimaryRadialMean, PrimaryRadialSd, PrimaryMae;
     public double PrimaryTangMedian;
@@ -131,7 +137,14 @@ public sealed class RoundStats
                            gp.Count > 0 ? Median(gp.Select(x => x.PrimaryRadialPct).ToList()) : 0, gp.Count));
         }
 
-        var prim = t.Where(x => x.HasPrimary).ToList();
+        // The open-loop view used to include the immediate retries that the buckets above exclude.
+        // A retry is a short movement starting right next to the ball it just missed, so it pulls
+        // max_extent towards 100% and shrinks the spread - same-config rounds looked tighter than
+        // the motor actually is, and hit-rate-adjacent counts were inflated. Both views now use
+        // the same set. Rounds written before 2026-10-23 mixed retries in, so prim_* numbers only
+        // compare within one side of that line.
+        var prim = aiming.Where(x => x.HasPrimary).ToList();
+        s.PrimaryRetryDropped = t.Count(x => x.HasPrimary) - prim.Count;
         s.PrimaryCount = prim.Count;
         s.CorrectedCount = prim.Count(x => x.Corrected);
         if (prim.Count > 0)
@@ -143,6 +156,8 @@ public sealed class RoundStats
             s.PrimaryMae = Mean(pr.Select(Math.Abs).ToList());
             s.PrimaryTangMedian = Median(prim.Select(x => Math.Abs(x.PrimaryTangentialPx)).ToList());
             s.PrimaryPeakMedian = Median(prim.Select(x => x.PrimaryPeakCms).ToList());
+            var ks = prim.Select(x => x.PrimaryScaleK).Where(k => !double.IsNaN(k) && k > 0).ToList();
+            s.ScaleKMedian = ks.Count > 0 ? Median(ks) : double.NaN;
             s.PrimaryOver = prim.Count(x => x.PrimaryRadialPct > 5);
             s.PrimaryUnder = prim.Count(x => x.PrimaryRadialPct < -5);
             s.PrimaryOn = prim.Count(x => Math.Abs(x.PrimaryRadialPct) <= 5);
@@ -222,8 +237,8 @@ public sealed class RoundStats
         // ---- what the reader must not assume ----
         if (s.RetryCount > 0)
             s.Note($"{s.RetryCount} clicks were immediate retries of the ball just missed " +
-                          "(<150px, same target): the distance buckets exclude them",
-                   $"{s.RetryCount} 次是打偏后对同一个球的立即补枪（<150px）：距离分桶里已剔除这些");
+                          "(<150px, same target): the distance buckets and the open-loop aggregates exclude them",
+                   $"{s.RetryCount} 次是打偏后对同一个球的立即补枪（<150px）：距离分桶和开环统计都已剔除这些");
         if (s.EmptyClickCount > 0)
             s.Note($"{s.EmptyClickCount}/{s.Count} clicks landed on no ball and were attributed to the nearest " +
                           $"one; treat those rows as misses, not as hitting the wrong ball",

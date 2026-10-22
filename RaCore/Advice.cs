@@ -24,6 +24,10 @@ public sealed class Trial
     public double PrimaryTimeMs, PrimaryPeakCms;
     public bool Corrected;              // the pointer kept advancing towards the target after the impulse
     public bool PrimaryScaled;          // path rescaled from counts to real pointer displacement
+    /// <summary>The stretch itself: 1 = the raw counts already matched the pointer pixels. Without
+    /// it, a round only showed WHETHER a path was rescaled, never how much of the measured shape
+    /// was reconstruction.</summary>
+    public double PrimaryScaleK = double.NaN;
     /// <summary>Segmentation-free: furthest along-axis point reached, as % of the aim distance.</summary>
     public double MaxExtentPct;
     public bool Overshot;               // it went past the far edge of the ball at some point

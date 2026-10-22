@@ -241,7 +241,12 @@ public static class TestLog
             sb.AppendLine($"speed captured : {stats.MeasuredCount}/{stats.Count} trials" +
                           (stats.MeasuredCount > 0 ? $"   median peak where measured {stats.PeakMedianWhenMeasured:0.0} c/ms" : ""));
             sb.AppendLine($"empty clicks   : {stats.EmptyClickCount} (click hit no ball; scored against the nearest one)");
-            sb.AppendLine($"retries        : {stats.RetryCount} (immediate re-click of the ball just missed, <150px; excluded from the buckets)");
+            sb.AppendLine($"retries        : {stats.RetryCount} (immediate re-click of the ball just missed, <150px; " +
+                          $"excluded from the buckets and, since this build, from the open-loop aggregates too" +
+                          (stats.PrimaryRetryDropped > 0 ? $": {stats.PrimaryRetryDropped} of them carried a primary impulse" : "") + ")");
+            if (!double.IsNaN(stats.ScaleKMedian))
+                sb.AppendLine($"path rescale   : median k = {stats.ScaleKMedian:0.000} (counts stretched to real pointer px; " +
+                              "1.00 = the counts already matched. Far from 1 means the numbers describe the reconstruction.)");
         }
 
         if (stats.Quality.Count > 0)
@@ -398,8 +403,11 @@ public static class TestLog
                 ["over"] = st.PrimaryOver, ["onTarget"] = st.PrimaryOn, ["under"] = st.PrimaryUnder,
                 ["peakMedianCms"] = Round(st.PrimaryPeakMedian),
                 ["correctedBeforeClick"] = st.CorrectedCount,
+                ["retriesDropped"] = st.PrimaryRetryDropped,
+                ["pathScaleKMedian"] = double.IsNaN(st.ScaleKMedian) ? null : Round(st.ScaleKMedian),
                 ["meaning"] = "endpoint of the FIRST movement (speed < 20% of peak); unlike the click error " +
-                              "this cannot be corrected away, so it is the measure that responds to gain",
+                              "this cannot be corrected away, so it is the measure that responds to gain. " +
+                              "Immediate retries are excluded from this set, same as from the distance buckets.",
             },
             ["outputSpeedApprox"] = new Dictionary<string, object?>
             {

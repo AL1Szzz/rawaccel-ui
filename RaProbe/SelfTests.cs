@@ -248,15 +248,27 @@ public static class SelfTests
 
         var seq = new List<Trial>
         {
-            new() { DistancePx = 300, TargetId = 4, Hit = false, RadialPct = -20, TangentialPx = 5, ErrorPx = 60, StartMs = 0, EndMs = 250, SampleCount = 5 },
-            new() { DistancePx = 40, TargetId = 4, Hit = true, RadialPct = 5, TangentialPx = 1, ErrorPx = 3, StartMs = 250, EndMs = 350, SampleCount = 5 },
-            new() { DistancePx = 60, TargetId = 9, Hit = true, RadialPct = -3, TangentialPx = 2, ErrorPx = 4, StartMs = 350, EndMs = 500, SampleCount = 5 },
+            new() { DistancePx = 300, TargetId = 4, Hit = false, RadialPct = -20, TangentialPx = 5, ErrorPx = 60, StartMs = 0, EndMs = 250, SampleCount = 5,
+                    HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = -20, PrimaryScaleK = 3 },
+            // the retry: short, same target, right after a miss. Its open-loop numbers are wildly
+            // different (it starts next to the ball), which is exactly why it must not be pooled.
+            new() { DistancePx = 40, TargetId = 4, Hit = true, RadialPct = 5, TangentialPx = 1, ErrorPx = 3, StartMs = 250, EndMs = 350, SampleCount = 5,
+                    HasPrimary = true, MaxExtentPct = 140, PrimaryRadialPct = 5, PrimaryScaleK = 100 },
+            new() { DistancePx = 60, TargetId = 9, Hit = true, RadialPct = -3, TangentialPx = 2, ErrorPx = 4, StartMs = 350, EndMs = 500, SampleCount = 5,
+                    HasPrimary = true, MaxExtentPct = 90, PrimaryRadialPct = -3, PrimaryScaleK = 1 },
         };
         var rs = RoundStats.Compute(seq, 26, 420);
         Check(rs.RetryCount == 1, $"an immediate re-click on the ball just missed is flagged as a retry ({rs.RetryCount})");
         Check(rs.Buckets.All(b => b.label != "<100px" || b.n == 1),
             $"the retry is kept out of the small-flick bucket ({string.Join(",", rs.Buckets.Select(b => b.label + ":" + b.n))})");
         Check(rs.Quality.Any(q => q.Contains("retries")), "the log says the buckets exclude retries");
+        Check(rs.PrimaryCount == 2 && rs.PrimaryRetryDropped == 1,
+            $"the open-loop set drops retries too: n={rs.PrimaryCount}, dropped={rs.PrimaryRetryDropped}");
+        Check(Math.Abs(rs.MaxExtentMedian - 80) < 0.01,
+            $"max-extent median comes from the two real flicks, not the retry (70/90 -> {rs.MaxExtentMedian:0}); " +
+            "a pooled retry would have pulled it to 90");
+        Check(Math.Abs(rs.ScaleKMedian - 2) < 0.01,
+            $"the reconstruction stretch is reported and retry-free (3/1 -> {rs.ScaleKMedian:0.0}); a pooled retry would read 100");
 
         var same = RoundStats.Compute(t, 26, 420);
         Check(same.Quality.Any(q => q.Contains("one distance bucket")),
