@@ -318,10 +318,13 @@ internal static class PollJitter
             return last;
         }
 
-        // Only plausible polling gaps may price the curve. A 30ms gap means the hand stopped, not
-        // that a packet was late; feeding it through gain() asks the model about a near-stationary
-        // pointer, which is meaningless for the statistics and a path that can throw.
-        var price = dt.FindAll(d => d <= 5_000);
+        // Only plausible polling gaps may price the curve, and the reference must come from the
+        // same set being priced. The first version used the global median as reference while
+        // pricing only gaps <= 5ms: on a machine whose delivery arrives coalesced at ~8ms that
+        // left nothing but faster-than-reference samples, and the table proudly reported the curve
+        // gaining +57% from jitter. Reference = median; priced = within 5x of it (pauses out).
+        double refUs = med;
+        var price = dt.FindAll(d => d >= refUs * 0.5 && d <= refUs * 5.0);
         if (price.Count < 20) price = dt;
 
         // The driver derives speed = counts / measured time, so a packet that arrives k times late
