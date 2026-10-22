@@ -32,8 +32,15 @@ public partial class DevicePage : UserControl
 
     List<MouseDevice> SafeEnumerate()
     {
+        // enumeration needs the raw-input device list; a failure here must not blank the page,
+        // but it must not be silent either - the reason is what tells us whether it is a
+        // permissions problem or simply no mouse attached.
         try { return App.State.EnumerateDevices(); }
-        catch (Exception e) { return new List<MouseDevice>(); }
+        catch (Exception e)
+        {
+            App.State.Status = "枚举鼠标失败：" + e.Message + "（下面只按配置文件里已有的设备显示）";
+            return new List<MouseDevice>();
+        }
     }
 
     // ---------- cards ----------

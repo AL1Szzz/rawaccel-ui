@@ -174,10 +174,9 @@ internal static class Program
                 Console.WriteLine($"   differing byte offsets (first 20 of {diffs.Count}): {string.Join(",", diffs.Take(20))}");
             }
 
-            Console.WriteLine("\n   curve for the live profile (by-component, 2000Hz poll => time=0.5ms):");
+            Console.WriteLine($"\n   curve for the live profile (by-component, one packet = {PollMs:0.###} ms, i.e. 2000 Hz):");
             Console.WriteLine("      speed    sens_x   gain_x   sens_y   gain_y   (counts/ms, 1000dpi-normalised)");
             var prof = driverStruct.prof;
-            const double t = 0.5;
             foreach (double v in new double[] { 0.5, 1, 2, 2.5, 3, 4, 5, 6, 8, 11.0833, 15, 25, 50 })
             {
                 double sensX = Out(prof, true, v) / v;
@@ -316,7 +315,7 @@ internal static class Program
             Console.WriteLine($"   X thresh={ax.Threshold:0.00} capAt={ax.CapSpeed:0.00} peak={ax.PeakGain:0.00}   " +
                               $"Y thresh={ay.Threshold:0.00} capAt={ay.CapSpeed:0.00} peak={ay.PeakGain:0.00}");
 
-            double sens = 1.0, dpi = 600;
+            double sens = 1.0;
             var mod = new Modifier(new ModifierSettings(prof));
 
             // the simulated player sizes every flick as if the stream were NOT accelerated
@@ -446,10 +445,16 @@ internal static class Program
         var a = t.Select(x => x.PeakSpeed).OrderBy(x => x).ToList();
         return a.Count == 0 ? 0 : a[Math.Clamp((int)(p * (a.Count - 1)), 0, a.Count - 1)];
     }
+    /// <summary>
+    /// One mouse packet at his 2000 Hz polling rate. Every table printed here assumes it,
+    /// so it is named once instead of being restated in a string that can go stale.
+    /// </summary>
+    internal const double PollMs = 0.5;
+
     /// <summary>output speed (counts/ms) for a pure-axis input of the given speed; fresh stateless pipeline.</summary>
     static double Out(ra_profile prof, bool horizontal, double speed)
     {
-        const double t = 0.5;
+        const double t = PollMs;
         var sp = new SpeedProcessor();
         sp.Init(prof.speed_processor_args);
         var m = new Modifier(new ModifierSettings(prof));
