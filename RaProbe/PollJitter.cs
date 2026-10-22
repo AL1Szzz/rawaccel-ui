@@ -31,14 +31,24 @@ internal static class PollJitter
 
     delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    // Field order IS the Win32 layout: cbSize, style, lpfnWndProc, cbClsExtra, cbWndExtra,
+    // hInstance, hIcon, hCursor, hbrBackground, lpszMenuName, lpszClassName, hIconSm. Grouping the
+    // IntPtrs together reads nicer but marshals garbage and RegisterClassEx fails with 87.
     [StructLayout(LayoutKind.Sequential)]
     struct WNDCLASSEX
     {
-        public uint cbSize, style;
-        public IntPtr lpfnWndProc, hInstance, hIcon, hCursor, hbrBackground, hIconSm;
-        public int cbClsExtra, cbWndExtra;
+        public uint cbSize;
+        public uint style;
+        public IntPtr lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public IntPtr hInstance;
+        public IntPtr hIcon;
+        public IntPtr hCursor;
+        public IntPtr hbrBackground;
         [MarshalAs(UnmanagedType.LPWStr)] public string? lpszMenuName;
         [MarshalAs(UnmanagedType.LPWStr)] public string lpszClassName;
+        public IntPtr hIconSm;
     }
 
     [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message, time; public IntPtr wParam, lParam; public int ptX, ptY; }
@@ -68,6 +78,12 @@ internal static class PollJitter
         int seconds = 20;
         int si = Array.FindIndex(args, a => a == "--seconds");
         if (si >= 0 && si + 1 < args.Length) int.TryParse(args[si + 1], out seconds);
+        else
+        {
+            // both spellings work: "--poll-jitter --seconds 30" and the shorter "--poll-jitter 30"
+            int self = Array.FindIndex(args, a => a == "--poll-jitter");
+            if (self >= 0 && self + 1 < args.Length) int.TryParse(args[self + 1], out seconds);
+        }
         if (seconds <= 0 || seconds > 300) seconds = 20;
 
         string settingsPath = @"D:\RawAccel\settings.json";
