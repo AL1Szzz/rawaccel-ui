@@ -65,6 +65,9 @@ public static class SelfTests
         Console.WriteLine("\n== M. Poll jitter: is the packet stream regular, and what does it cost in gain ==");
         Section("jitter", JitterChecks);
 
+        Console.WriteLine("\n== N. Presets: names, hashes, and which slot the driver actually uses ==");
+        Section("presets", PresetChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -1249,5 +1252,56 @@ public static class SelfTests
         }
         catch (Exception e) { Check(false, "unexpected exception in the jitter test: " + e.Message); }
         finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // ---------- N ----------
+
+    static void PresetChecks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "raui-presets-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var prior = Presets.DirOverride;
+        Presets.DirOverride = dir;      // never let a test move a real preset
+        try
+        {
+            // names double as file names, so nothing that could walk out of the library survives
+            Check(Presets.SafeName("  My Curve/v1 ") == "My_Curvev1", $"spaces and separators are handled: '{Presets.SafeName("  My Curve/v1 ")}'");
+            Check(Presets.SafeName("../../etc") == "etc", "a traversal attempt collapses to a plain word");
+            Check(Presets.SafeName("###") == "", "pure punctuation yields an empty name, which Save then refuses");
+            Check(Presets.SafeName(new string('x', 90)).Length == 40, "a long name is cut, not rejected mid-write");
+
+            var p = new ProfileDto { Name = "default", YxRatio = 1.25 };
+            p.Y.InputOffset = 2.5;
+            var file = Presets.Save("V125", p, out string err);
+            Check(file != null && err == "", "a clean profile saves as a preset");
+            var list = Presets.List();
+            Check(list.Count == 1 && list[0].Name == "V125", "the library lists it by name");
+            Check(list[0].Sha == ConfigHash.Of(p), "the preset carries the same hash the driver reports for it");
+            Check(list[0].Summary.Contains("yx 1.25") && list[0].Summary.Contains("Y 2.5"),
+                  $"the summary shows the numbers that tell presets apart: {list[0].Summary}");
+
+            var back = Presets.TryLoad(file!);
+            Check(back != null && Math.Abs(back.YxRatio - 1.25) < 1e-12 && back.Name == "default",
+                  "the file keeps the profile's own name, so its sha is the sha the driver will report");
+
+            var bad = new ProfileDto { Name = "" };
+            Check(Presets.Save("bad", bad, out string err2) == null && err2.Contains("名字"),
+                  "an unusable profile is refused at save time, not at write-to-driver time: " + err2);
+
+            // the wire semantics the preset bar is built on
+            var doc = new RootDto();
+            doc.Profiles.Add(new ProfileDto { Name = "default" });
+            doc.Profiles.Add(new ProfileDto { Name = "V" });
+            doc.Devices.Add(new DeviceDto { Id = @"HID\VID_1", Profile = "V" });
+            Check(Presets.TargetIndex(doc, @"HID\VID_1") == 1, "a listed device follows its own profile reference");
+            Check(Presets.TargetIndex(doc, @"HID\VID_2") == 0, "an unlisted device falls back to the first profile");
+            doc.Devices[0].Profile = "gone";
+            Check(Presets.TargetIndex(doc, @"HID\VID_1") == 0, "a dangling reference falls back instead of throwing");
+            Check(Presets.TargetIndex(doc, null) == 0, "no device id at all still resolves to a writable slot");
+
+            Check(Presets.Delete("V125", out _) && Presets.List().Count == 0, "delete takes it out of the library");
+            Check(!Presets.Delete("V125", out string gone) && gone.Contains("没有"), "deleting twice reports it instead of pretending");
+        }
+        finally { Presets.DirOverride = prior; try { Directory.Delete(dir, true); } catch { } }
     }
 }

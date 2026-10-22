@@ -28,7 +28,11 @@ public sealed record Preset(string Name, string Sha, string File, string Summary
 /// </summary>
 public static class Presets
 {
-    public static string Dir => Path.Combine(AppData.Root, "presets");
+    /// <summary>Test hook: point the library somewhere else, so a self-test can never move or
+    /// delete a real preset (same pattern as TestLog.IndexOverride).</summary>
+    public static string? DirOverride;
+
+    public static string Dir => Path.Combine(DirOverride ?? AppData.Root, "presets");
 
     /// <summary>Names are typed by a person; keep them to what a file name and a device
     /// profile reference can both survive.</summary>
@@ -89,10 +93,12 @@ public static class Presets
         try
         {
             Directory.CreateDirectory(Dir);
+            // The profile keeps its OWN name inside the file; the preset label is the file name.
+            // Renaming it here would look tidy and break two things: the stored sha would no
+            // longer equal the sha the driver reports for the live profile (so "which preset is
+            // live" could never light up), and a profile with an unusable name would sail past
+            // validation because the bad name got overwritten.
             var copy = profile.Clone();
-            // the stored name is the preset label, so a preset re-applied into a document whose
-            // slot is called something else still carries its own identity in the file
-            copy.Name = safe;
             var problems = Json.Validate(new RootDto { Profiles = { copy }, Devices = new() });
             if (problems.Count > 0) { error = "这份配置本身有问题：" + string.Join("；", problems.Take(4)); return null; }
             var file = Path.Combine(Dir, safe + ".json");
