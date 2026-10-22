@@ -290,6 +290,13 @@ public sealed class SpeedRecorder
 
     public int Count { get { lock (gate) return recent.Count; } }
 
+    /// <summary>
+    /// Windows ever emitted, monotonic, never trimmed. Count is the wrong thing to poll for
+    /// "did anything arrive": the ring buffer pins at Capacity after ~2 minutes of movement and
+    /// then stops changing, which froze the live speed overlay on the curve page.
+    /// </summary>
+    public long Windows { get { lock (gate) return nextSeq - 1; } }
+
     public List<MouseSample> Snapshot() { lock (gate) { FlushNoLock(); return recent.ToList(); } }
 
     /// <summary>Every sample emitted since the given mark (inclusive of the mark's first sample).</summary>

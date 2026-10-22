@@ -11,7 +11,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-dotnet publish RaProbe\RaProbe.csproj -c Release -r win-x64 --self-contained false -p:DebugType=none -o app
+rem RaProbe keeps its .pdb on purpose: when a diagnostic crashes, line numbers are the whole
+rem difference between "we know where" and "ask the user to run it again and hope".
+dotnet publish RaProbe\RaProbe.csproj -c Release -r win-x64 --self-contained false -o app
 if errorlevel 1 (
   echo RaProbe publish failed.
   exit /b 1
