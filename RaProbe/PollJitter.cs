@@ -51,7 +51,13 @@ internal static class PollJitter
         public IntPtr hIconSm;
     }
 
-    [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message, time; public IntPtr wParam, lParam; public int ptX, ptY; }
+    // Field order is the Win32 layout and it is NOT cosmetic: PeekMessageW writes the whole 48-byte
+    // MSG into this struct. Writing it as "message, time" together (which reads tidier) shrank the
+    // struct to 40 bytes, the extra 8 landed on the stack, and the tool died at random points - one
+    // run a NullReferenceException blamed on GetCursorPos, the next an AccessViolationException.
+    [StructLayout(LayoutKind.Sequential)]
+    struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam;
+                 public uint time; public int ptX; public int ptY; }
 
     [DllImport("user32.dll", SetLastError = true)] static extern ushort RegisterClassExW(ref WNDCLASSEX wc);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -78,19 +84,30 @@ internal static class PollJitter
     /// (with line numbers, once the .pdb sits next to the exe) both to the console and to the
     /// jitter folder, so one run is enough to locate it.
     /// </summary>
+    static string? firstThrow;
+
     public static int Run(string[] args)
     {
+        // The stack that reaches the catch below has already crossed a native transition
+        // (DispatchMessageW -> our WndProc) and comes back truncated to the call site - it blamed
+        // GetCursorPos/Pump for two rounds. FirstChanceException fires at the throw point, while
+        // the real frames are still on the stack.
+        AppDomain.CurrentDomain.FirstChanceException += (_, ev) => firstThrow ??= ev.Exception.ToString();
         try { return RunInner(args); }
         catch (Exception e)
         {
             Console.WriteLine("探针自己出错了（测量数据没有丢，是代码问题）：");
+            if (firstThrow != null && firstThrow != e.ToString())
+                Console.WriteLine("真实现场（首次抛出时记录）：\n" + firstThrow);
             Console.WriteLine(e);
             try
             {
                 var dir = Path.Combine(AppData.Root, "jitter");
                 Directory.CreateDirectory(dir);
                 var txt = Path.Combine(dir, "CRASH-" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
-                File.WriteAllText(txt, string.Join(Environment.NewLine, report) + Environment.NewLine + e);
+                File.WriteAllText(txt, string.Join(Environment.NewLine, report) + Environment.NewLine +
+                                  "首次抛出：" + Environment.NewLine + firstThrow + Environment.NewLine +
+                                  "冒泡到此：" + Environment.NewLine + e);
                 Console.WriteLine("已写: " + txt);
             }
             catch (Exception e2) { Console.WriteLine("连崩溃日志都没写成: " + e2.Message); }
@@ -163,7 +180,8 @@ internal static class PollJitter
         while (travel < 200 && wait.Elapsed.TotalSeconds < 120)
         {
             Pump();
-            GetCursorPos(out var now);
+            var now = CursorPos();                      // named helper: if the reported line is a
+                                                        // lie, the frame name tells us where it moved
             travel += Math.Abs(now.X - prev.X) + Math.Abs(now.Y - prev.Y);
             prev = now;
             if (wait.Elapsed.TotalSeconds - lastBeat >= 3)
@@ -194,6 +212,15 @@ internal static class PollJitter
         return 0;
     }
 
+    /// <summary>Struct sizes the Win32 ABI expects, exposed so the selftest can pin them. A P/Invoke
+    /// struct that is smaller than the API writes back is stack corruption, not a type error.</summary>
+    internal static (int Msg, int ClsEx, int Pt) MarshaledSizes =>
+        (System.Runtime.InteropServices.Marshal.SizeOf<MSG>(),
+         System.Runtime.InteropServices.Marshal.SizeOf<WNDCLASSEX>(),
+         System.Runtime.InteropServices.Marshal.SizeOf<POINT>());
+
+    static POINT CursorPos() { GetCursorPos(out POINT p); return p; }
+
     static void Pump()
     {
         while (PeekMessageW(out var m, IntPtr.Zero, 0, 0, 1))
@@ -205,25 +232,42 @@ internal static class PollJitter
         Thread.SpinWait(200);      // no Sleep(1): a 1ms quantum would be pure measurement bias
     }
 
+    static int wndErrors;
+    static Exception? firstWndError;
+
     static unsafe IntPtr Wnd(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg != WM_INPUT) return DefWindowProcW(hWnd, msg, wParam, lParam);
-        long us = (long)((Stopwatch.GetTimestamp() - t0) / freqPerUs);
 
-        uint size = 0;
-        RawInput.GetRawInputData(lParam, RawInput.RID_INPUT, IntPtr.Zero, ref size, RawInput.HEADER_SIZE);
-        if (size == 0 || size > 1 << 16) return DefWindowProcW(hWnd, msg, wParam, lParam);
-        IntPtr buf = Marshal.AllocHGlobal((int)size);
+        // One bad packet must never take down the whole measurement, and an exception that
+        // escapes through the native DispatchMessageW transition gets a collapsed, misleading
+        // managed stack (it blamed line 166, GetCursorPos, for weeks). Catch it here, where the
+        // frame is still ours, and report it once.
         try
         {
-            uint got = RawInput.GetRawInputData(lParam, RawInput.RID_INPUT, buf, ref size, RawInput.HEADER_SIZE);
-            if (got < 48 || got == 0xFFFFFFFFu) return DefWindowProcW(hWnd, msg, wParam, lParam);
-            byte* b = (byte*)buf;
-            if (*(uint*)b != 0) return DefWindowProcW(hWnd, msg, wParam, lParam);        // not a mouse
-            if ((*(ushort*)(b + 24) & 0x0001) != 0) return DefWindowProcW(hWnd, msg, wParam, lParam);  // absolute
-            pkts.Add(new Pkt(us, *(int*)(b + 36), *(int*)(b + 40)));
+            long us = (long)((Stopwatch.GetTimestamp() - t0) / freqPerUs);
+
+            uint size = 0;
+            RawInput.GetRawInputData(lParam, RawInput.RID_INPUT, IntPtr.Zero, ref size, RawInput.HEADER_SIZE);
+            if (size == 0 || size > 1 << 16) return DefWindowProcW(hWnd, msg, wParam, lParam);
+            IntPtr buf = Marshal.AllocHGlobal((int)size);
+            try
+            {
+                uint got = RawInput.GetRawInputData(lParam, RawInput.RID_INPUT, buf, ref size, RawInput.HEADER_SIZE);
+                if (got >= 48 && got != 0xFFFFFFFFu)
+                {
+                    byte* b = (byte*)buf;
+                    if (*(uint*)b == 0 && (*(ushort*)(b + 24) & 0x0001) == 0)      // mouse, relative
+                        pkts.Add(new Pkt(us, *(int*)(b + 36), *(int*)(b + 40)));
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
         }
-        finally { Marshal.FreeHGlobal(buf); }
+        catch (Exception e)
+        {
+            wndErrors++;
+            firstWndError ??= e;
+        }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
@@ -318,11 +362,15 @@ internal static class PollJitter
         catch (Exception e) { Say("只报抖动，不报增益：" + e.Message); return; }
         if (r == null) { Say($"包数 {pkts.Count}，太少或移动太断续，结论不成立"); return; }
 
-        Say($"包数 {r.Packets} / {seconds:0.0}s   间隔样本 {r.Gaps}");
+        Say($"包数 {r.Packets} / {seconds:0.0}s   间隔样本 {r.Gaps}" +
+            (wndErrors > 0 ? $"   （处理中有 {wndErrors} 个包出错：{firstWndError}）" : ""));
         Say($"包间隔 ms: p50 {r.MedUs / 1000:0.000}  p90 {r.P90Us / 1000:0.000}  " +
                           $"p99 {r.P99Us / 1000:0.000}  max {r.MaxUs / 1000:0.000}");
         Say($"等效轮询率(按 p50): {r.Hz:0} Hz");
         Say($"   比 p50 慢 1.5/2/3/5 倍以上的包: {r.Slow15:0.0}% / {r.Slow20:0.0}% / {r.Slow30:0.0}% / {r.Slow50:0.0}%");
+        int still = pkts.Count(p => p.dx == 0 && p.dy == 0);
+        Say($"   没有位移的包 {100.0 * still / pkts.Count:0.0}%  ← Windows 会滤掉无变化的报告，所以慢慢挪的时候" +
+            "上面的 p50 不等于轮询率；要测真实节律，全程保持明显甩动");
 
         Say();
         Say("把「包迟到」折算成增益损失（速度被低估 k 倍 → 查表查到 k 倍更慢的地方）：");

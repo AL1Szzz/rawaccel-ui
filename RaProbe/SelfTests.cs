@@ -1118,6 +1118,12 @@ public static class SelfTests
 
     static void JitterChecks()
     {
+        // The probe once corrupted its own stack: PeekMessageW writes 48 bytes of MSG, and a
+        // "tidier looking" field order had shrunk the struct to 40. Sizes are asserted here so the
+        // layout cannot drift back - the crash it caused looked like a null in an unrelated API.
+        var (msgSize, clsSize, ptSize) = PollJitter.MarshaledSizes;
+        Check(msgSize == 48 && clsSize == 80 && ptSize == 8,
+            $"Win32 struct sizes hold: MSG {msgSize} (48), WNDCLASSEX {clsSize} (80), POINT {ptSize} (8)");
         var dir = Path.Combine(Path.GetTempPath(), "raui-jitter-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         try
