@@ -80,6 +80,24 @@ public partial class App : Application
             return;
         }
 
+        // Render the .ico that gets embedded in the exe. Done from here rather than with an image
+        // editor so the file icon is guaranteed to be the same drawing as the tray and the window.
+        int icoIdx = System.Array.FindIndex(e.Args, a => a == "--dump-ico");
+        if (icoIdx >= 0)
+        {
+            Headless = true;
+            string outIco = icoIdx + 1 < e.Args.Length ? e.Args[icoIdx + 1] : @"RaUI\raui.ico";
+            try
+            {
+                AppArt.ExportIco(outIco);
+                System.Console.WriteLine($"icon: {new System.IO.FileInfo(outIco).Length} bytes, " +
+                                         $"frames {string.Join(",", AppArt.IcoSizes)} -> {outIco}");
+            }
+            catch (Exception ex) { System.Console.WriteLine("icon FAILED: " + ex.Message); }
+            Shutdown();
+            return;
+        }
+
         // headless check of the login-autostart round trip, using the real registry code path
         if (System.Array.Exists(e.Args, a => a == "--autostart-check"))
         {

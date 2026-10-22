@@ -13,6 +13,10 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        // the title bar and taskbar button used to show the generic WPF app icon: the tray had
+        // art, the window did not. Same drawing as the tray, handed over as a frozen image.
+        try { Icon = AppArt.RenderImage(64); } catch { /* a window without an icon still works */ }
+
         pages = new UserControl[]
         {
             new CurvePage(),

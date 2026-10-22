@@ -382,45 +382,11 @@ public sealed class TrayIcon : IDisposable
     static IntPtr BuildIcon(out string artPath)
     {
         const int size = 32;
-        var dv = new DrawingVisual();
-        using (var dc = dv.RenderOpen())
-        {
-            var bg = new LinearGradientBrush(Color.FromRgb(0x2A, 0x2F, 0x38), Color.FromRgb(0x14, 0x17, 0x1C),
-                                             new Point(0, 0), new Point(size, size));
-            bg.Freeze();
-            dc.DrawRoundedRectangle(bg, null, new Rect(1, 1, size - 2, size - 2), 7, 7);
-
-            // the thing this app is about: a curve that stays flat, then rises
-            var line = new SolidColorBrush(Color.FromRgb(0x7C, 0xD6, 0xFF));
-            line.Freeze();
-            var pen = new Pen(line, 2.4)
-            { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            pen.Freeze();
-            var fig = new PathFigure { StartPoint = new Point(5, 24) };
-            fig.Segments.Add(new BezierSegment(new Point(12, 24), new Point(18, 23), new Point(21, 15), true));
-            fig.Segments.Add(new BezierSegment(new Point(23, 9), new Point(25, 6), new Point(27, 5), true));
-            var geo = new PathGeometry();
-            geo.Figures.Add(fig);
-            geo.Freeze();
-            dc.DrawGeometry(null, pen, geo);
-
-            var dot = new SolidColorBrush(Color.FromRgb(0xFF, 0xC2, 0x4D));
-            dot.Freeze();
-            dc.DrawEllipse(dot, null, new Point(27, 6), 2.6, 2.6);
-        }
-
-        var rtb = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
-        rtb.Render(dv);
+        // one drawing for tray, window and exe: AppArt owns the glyph
+        var rtb = AppArt.RenderBitmap(size);
 
         artPath = System.IO.Path.Combine(RaCore.AppData.Root, "tray-icon.png");
-        try
-        {
-            var enc = new PngBitmapEncoder();
-            enc.Frames.Add(BitmapFrame.Create(rtb));
-            using var fs = System.IO.File.Create(artPath);
-            enc.Save(fs);
-        }
-        catch { /* the PNG copy is only for checking the art */ }
+        try { AppArt.ExportPng(artPath, size); } catch { /* the PNG copy is only for checking the art */ }
 
         byte[] top = new byte[size * size * 4];
         rtb.CopyPixels(top, size * 4, 0);
