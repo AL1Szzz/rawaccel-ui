@@ -51,7 +51,7 @@ function splitLine(s) {
   return out;
 }
 
-function readShots(file) {
+export function readShots(file) {
   const lines = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '').trim().split(/\r?\n/);
   const head = splitLine(lines[0]);
   const col = (n) => head.indexOf(n);
@@ -75,7 +75,7 @@ function readShots(file) {
   return { rows, exactKills: iK >= 0 && rows.some(r => r.kill === true) };
 }
 
-function bursts(rows) {
+export function bursts(rows) {
   const out = [];
   let cur = [];
   for (const r of rows) {
@@ -110,7 +110,7 @@ const isHead = (g) => /head|neck/.test(g);
 const isTorso = (g) => /chest|stomach/.test(g);
 const isLimb = (g) => /arm|leg/.test(g);
 
-function summarize(rows, exactKills) {
+export function summarize(rows, exactKills) {
   const bs = bursts(rows);
   const long = bs.filter(b => b.length >= LONG_BURST);
   const onTarget = long.filter(b => b.some(s => s.hit));
@@ -255,4 +255,7 @@ function main() {
   return 0;
 }
 
-process.exit(main());
+// Only run when executed directly, so field/test.mjs can import the burst math.
+const selfPath = path.resolve(fileURLToPath(import.meta.url)).toLowerCase();
+const argPath = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : '';
+if (selfPath === argPath) process.exit(main());

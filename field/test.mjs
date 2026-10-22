@@ -122,6 +122,70 @@ function analyze(kind) {
   check(series.length > 40, 'series has one row per demo tick', String(series.length));
 }
 
+// ---- spray-burst analysis (what decides the aim-map A/B/A) ----
+{
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { readShots, bursts, summarize } = await import('./spray-bursts.mjs');
+
+  const HEAD = 'tick,time_ms,weapon,distance_m,distance_bucket,victim_id,victim_name,hit,hitgroup,damage,' +
+    'aim_error_deg,peak_cms,peak_deg_s,overshoot_deg,reversals,corrected,direction,duration_ms,arc_ratio,hp_after,kill';
+  const row = (tick, hit, group, dmg, hp, kill, name = 'pov') => {
+    const c = new Array(21).fill('');
+    c[0] = String(tick); c[2] = 'weapon_ak47'; c[4] = 'unknown'; c[5] = 'pov'; c[6] = name;
+    c[7] = hit ? '1' : '0'; c[8] = hit ? group : ''; c[9] = hit ? String(dmg) : '0';
+    c[19] = hit ? String(hp) : ''; c[20] = kill ? '1' : '0';
+    return c.join(',');
+  };
+
+  const lines = [HEAD];
+  // magazine 1: two bodies (4 bullets, then 5), then 21 shots into nothing
+  for (let i = 0; i < 30; i++) {
+    const tick = 100 + i * 7;
+    if (i < 4) lines.push(row(tick, true, 'chest', 26, 74 - 26 * i, i === 3, i === 0 ? '"Doe, John"' : 'pov'));
+    else if (i < 9) lines.push(row(tick, true, 'chest', 20, 80 - 20 * (i - 4), i === 8));
+    else lines.push(row(tick, false, '', 0, '', false));
+  }
+  // magazine 2: a wall spray, 20 shots, zero hits (starts after a real reload gap)
+  for (let i = 0; i < 20; i++) lines.push(row(500 + i * 7, false, '', 0, '', false));
+  // a short tap burst: must not count as a spray
+  for (let i = 0; i < 5; i++) lines.push(row(900 + i * 7, true, 'head', 100, 0, true));
+
+  const file = path.join(os.tmpdir(), `raui-burst-test-${Date.now()}.csv`);
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  try {
+    const { rows, exactKills } = readShots(file);
+    check(rows.length === 55 && exactKills, 'a quoted comma inside a victim name does not shift the columns',
+      `${rows.length} rows, exactKills=${exactKills}`);
+    const bs = bursts(rows);
+    check(bs.length === 3 && bs[0].length === 30 && bs[1].length === 20 && bs[2].length === 5,
+      `the tick gap splits three bursts of 30/20/5 (${bs.map(b => b.length).join('/')})`);
+
+    const s = summarize(rows, exactKills);
+    check(s.longBursts === 2 && s.onTargetLong === 1 && s.wallLong === 1,
+      'the wall magazine is counted separately from the ones that hit bodies',
+      `long ${s.longBursts}, bodies ${s.onTargetLong}, wall ${s.wallLong}`);
+    check(s.killsInSprays === 2 && Math.abs(s.killsPerSpray - 2) < 0.01,
+      `kill flags segment the magazine into bodies (${s.killsInSprays} in ${s.onTargetLong} spray)`);
+    check(s.medianBulletsPerBody === 5 && Math.abs(s.meanBulletsPerBody - 4.5) < 0.01,
+      `bullets per body come from the segments, not from the whole mag (${s.medianBulletsPerBody} / ${s.meanBulletsPerBody})`);
+    check(Math.abs(s.rate1 - 90) < 0.01 && s.rate3 === 0,
+      `depth buckets: 9 of the first 10 hit, none of 21-30 (${s.rate1} / ${s.rate3})`);
+    check(s.torso1 === 100 && s.head1 === 0 && s.limb1 === 0,
+      'the depth hitgroup share is a share OF THE HITS in that slice');
+    check(Math.abs(s.hitPct - 100 * 14 / 55) < 0.01,
+      `aggregate hit% counts every gun shot, wall magazine included (${s.hitPct.toFixed(1)}%)`);
+
+    const inferred = summarize(rows, false);
+    check(inferred.killsInSprays === 2,
+      'the pre-kill-column fallback (spend hits off 100 HP) agrees with the kill flags here',
+      `${inferred.killsInSprays}`);
+  } finally {
+    try { fs.unlinkSync(file); } catch { }
+}
+}
+
 console.log('');
 console.log(failed === 0 ? `ALL ${checks} FIELD-MATH CHECKS PASSED` : `${failed}/${checks} CHECKS FAILED`);
 process.exit(failed === 0 ? 0 : 1);
