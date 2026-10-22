@@ -5,7 +5,10 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <!-- the driver allows non-elevated writes; stay asInvoker -->
+        <!-- asInvoker on purpose: the app is an editor, it should not be a UAC prompt.
+             Whether the driver's DAC lets a filtered token write is a property of the driver,
+             not something this file can grant - see the note on RaDevice. If it ever refuses,
+             the UI says "写入被拒绝（错误 5）" rather than pretending the driver is missing. -->
         <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>

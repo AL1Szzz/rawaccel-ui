@@ -8,8 +8,12 @@ namespace RaCore;
 /// Mirrors rawaccel-src/common/rawaccel-io.hpp:
 ///   \\.\rawaccel  +  IOCTL READ(0x888) / WRITE(0x889) / GET_VERSION(0x88a)
 ///   device type 0x8888, METHOD_BUFFERED, FILE_ANY_ACCESS, opened with 0 access rights.
-/// The driver's DAC decides whether the current token may open the device; that has only
-/// been observed to work from an elevated process, so do not claim non-admin access is proven.
+/// The driver's DAC decides whether the current token may open the device. What has actually been
+/// observed on this machine: writes succeed from a double-clicked RaProbe and from RaUI's patch
+/// path, but neither run has had its integrity level recorded, so "non-admin works" is NOT a
+/// proven claim - and the assistant's own shell here runs elevated, so its successes prove nothing
+/// either. If a future driver tightens the DAC, the failure shows up as Win32 error 5, which both
+/// RaProbe and the UI name explicitly instead of calling it a missing driver.
 /// </summary>
 public static unsafe class RaDevice
 {
