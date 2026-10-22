@@ -108,21 +108,42 @@ internal static class PollJitter
         if (hwnd == IntPtr.Zero) { Console.WriteLine("CreateWindowEx 失败: " + Marshal.GetLastWin32Error()); return 1; }
         if (!RawInput.Register(hwnd)) { Console.WriteLine("RegisterRawInputDevices 失败"); return 1; }
 
-        Console.WriteLine($"采集 {seconds}s。请像平时甩枪那样反复移动鼠标（先等它动）…");
+        // Progress has to be printed. A tool that says nothing for up to 140 seconds gets read as
+        // "it hung", and the user cannot tell that apart from a real freeze.
+        Console.WriteLine($"采集 {seconds}s。请像平时甩枪那样反复移动鼠标。");
+        Console.WriteLine("（先等光标动起来，最多等 120 秒）");
         double travel = 0;
         GetCursorPos(out var prev);
         var wait = Stopwatch.StartNew();
+        double lastBeat = -1;
         while (travel < 200 && wait.Elapsed.TotalSeconds < 120)
         {
             Pump();
             GetCursorPos(out var now);
             travel += Math.Abs(now.X - prev.X) + Math.Abs(now.Y - prev.Y);
             prev = now;
+            if (wait.Elapsed.TotalSeconds - lastBeat >= 3)
+            {
+                lastBeat = wait.Elapsed.TotalSeconds;
+                Console.WriteLine($"  还在等光标动… 已等 {wait.Elapsed.TotalSeconds:0} 秒，" +
+                                  $"累计移动 {travel:0} px（要 200 才开始计数）");
+            }
         }
+        if (travel < 200) Console.WriteLine("没等到移动，直接开始 —— 现在起请持续甩动鼠标。");
 
         pkts.Clear();
+        Console.WriteLine($"开始计数 {seconds} 秒，请持续甩动鼠标…");
         var run = Stopwatch.StartNew();
-        while (run.Elapsed.TotalSeconds < seconds) Pump();
+        lastBeat = 0;
+        while (run.Elapsed.TotalSeconds < seconds)
+        {
+            Pump();
+            if (run.Elapsed.TotalSeconds >= lastBeat + 1)
+            {
+                lastBeat = Math.Floor(run.Elapsed.TotalSeconds);
+                Console.WriteLine($"  {run.Elapsed.TotalSeconds:0}s / {seconds}s  已收到 {pkts.Count} 个包");
+            }
+        }
         DestroyWindow(hwnd);
 
         Analyze(run.Elapsed.TotalSeconds, settingsPath);
