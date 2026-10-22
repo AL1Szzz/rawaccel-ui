@@ -20,7 +20,11 @@ public readonly record struct PrimaryImpulse(
     // out and comes back lands exactly where a straight flick lands (measured: tangential
     // endpoint error is only ~20-28px on 700px flicks while the user reports drawing circles).
     // Shape survives the click-normalised rescale because the rescale is isotropic.
-    double LateralPathPx, double ArcRatio, int Reversals, double PerpPeakPx, double AsymCoef);
+    double LateralPathPx, double ArcRatio, int Reversals, double PerpPeakPx, double AsymCoef,
+    // The raw pieces of the fit. Averaging per-flick slopes is NOT a valid estimator: a nearly
+    // axis-aligned flick divides by almost nothing, so its ratio can be anything and one such
+    // sample drags the mean. The round pools these and fits once instead.
+    double AsymNum, double AsymDen);
 
 public static class OpenLoop
 {
@@ -209,6 +213,6 @@ public static class OpenLoop
                                   maxAlong / dist * 100.0, maxAlong > dist + reachRadius,
                                   firstIn >= 0 ? samples[firstIn].timeMs - startMs : double.NaN,
                                   samples[onset].timeMs - startMs,
-                                  lateralPath, lateralPath / dist, reversals, perpPeak, asym);
+                                  lateralPath, lateralPath / dist, reversals, perpPeak, asym, num, den);
     }
 }

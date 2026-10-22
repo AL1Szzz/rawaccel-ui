@@ -163,6 +163,7 @@ public static class Simulator
                 LateralPathPx = prim?.LateralPathPx ?? 0, ArcRatio = prim?.ArcRatio ?? 0,
                 PathReversals = prim?.Reversals ?? 0, PerpPeakPx = prim?.PerpPeakPx ?? 0,
                 AsymCoef = prim?.AsymCoef ?? double.NaN,
+                AsymNum = prim?.AsymNum ?? 0, AsymDen = prim?.AsymDen ?? 0,
             });
             ox = tx; oy = ty;
         }

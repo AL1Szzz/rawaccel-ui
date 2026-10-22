@@ -754,7 +754,7 @@ public static class SelfTests
                     MaxExtentPct = 101, PrimaryRadialPct = 0,
                     ArcRatio = pr?.ArcRatio ?? 0, LateralPathPx = pr?.LateralPathPx ?? 0,
                     PerpPeakPx = pr?.PerpPeakPx ?? 0, PathReversals = pr?.Reversals ?? 0,
-                    AsymCoef = pr?.AsymCoef ?? double.NaN,
+                    AsymCoef = pr?.AsymCoef ?? double.NaN, AsymNum = pr?.AsymNum ?? 0, AsymDen = pr?.AsymDen ?? 0,
                 });
             }
             return l;
@@ -765,6 +765,33 @@ public static class SelfTests
             $"40 straight diagonal flicks give no asymmetry: e = {stE0.AsymMean:0.000} +- {stE0.AsymSem:0.000} (n={stE0.AsymN})");
         Check(stE1.AsymMean > 0.07 && stE1.AsymMean - 2 * stE1.AsymSem > 0,
             $"40 flicks with a 10% Y surplus are detected beyond their own scatter: e = {stE1.AsymMean:0.000} +- {stE1.AsymSem:0.000}");
+
+        // The error bar itself has to be trustworthy, otherwise "no asymmetry found" is just a
+        // sentence. Feed flicks whose individual slopes scatter around a known truth and check the
+        // pooled fit recovers it and that the bar shrinks like 1/sqrt(n).
+        static List<Trial> AsymTrials(int n, double spread)
+        {
+            var l = new List<Trial>();
+            for (int i = 0; i < n; i++)
+            {
+                double coef = 0.10 + (i % 2 == 0 ? spread : -spread);
+                l.Add(new Trial
+                {
+                    DistancePx = 700, AngleRad = System.Math.PI / 4, Hit = true, HasPrimary = true,
+                    SampleCount = 9, MaxExtentPct = 101, PrimaryRadialPct = 0,
+                    AsymCoef = coef, AsymNum = coef * 1000, AsymDen = 1000,
+                });
+            }
+            return l;
+        }
+        var bar40 = RoundStats.Compute(AsymTrials(40, 0.02), 26, 700);
+        var bar160 = RoundStats.Compute(AsymTrials(160, 0.02), 26, 700);
+        Check(Math.Abs(bar40.AsymMean - 0.10) < 1e-9 && bar40.AsymN == 40,
+            $"the pooled fit recovers the true slope, not the average of ratios ({bar40.AsymMean:0.000})");
+        Check(bar160.AsymSem > 0 && bar160.AsymSem < bar40.AsymSem * 0.75,
+            $"the error bar shrinks with sample size: n=40 ±{bar40.AsymSem:0.0000} -> n=160 ±{bar160.AsymSem:0.0000}");
+        Check(bar40.AsymMean > 3 * bar40.AsymSem,
+            $"a real 10% surplus clears its own bar by {bar40.AsymMean / bar40.AsymSem:0.0}x - so a null result means something");
 
         Check(p.Value.MaxExtentPct > 110 && p.Value.Overshot,
             $"a flick that flies past reads max_extent {p.Value.MaxExtentPct:0}% / overshot={p.Value.Overshot}");
@@ -948,7 +975,7 @@ public static class SelfTests
                 {
                     DistancePx = 700, AngleRad = System.Math.PI / 4 + i * 0.05, Hit = true, HasPrimary = true,
                     SampleCount = 9, MaxExtentPct = 101, PrimaryRadialPct = -3,
-                    ArcRatio = 0.42, LateralPathPx = 294, PerpPeakPx = 31, PathReversals = 1, AsymCoef = 0.08,
+                    ArcRatio = 0.42, LateralPathPx = 294, PerpPeakPx = 31, PathReversals = 1, AsymCoef = 0.08, AsymNum = 800, AsymDen = 10_000,
                 });
             var memSt = RoundStats.Compute(shape, 26, 700);
             var shapeData = new RoundData

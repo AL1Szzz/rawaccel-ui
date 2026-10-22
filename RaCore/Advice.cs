@@ -36,6 +36,9 @@ public sealed class Trial
     public int PathReversals;           // perpendicular direction changes: 1 = out and back (a hook)
     public double PerpPeakPx;           // signed furthest distance from the aim line during the impulse
     public double AsymCoef = double.NaN; // + = Y over-driven vs X, - = X over-driven vs Y, 0 = noise
+    /// <summary>Raw least-squares pieces behind AsymCoef; the round pools these and fits once,
+    /// because averaging per-flick ratios lets one near-axis flick dominate the answer.</summary>
+    public double AsymNum, AsymDen;
 }
 
 public readonly record struct AxisProfile(double Threshold, double CapSpeed, double PeakGain);

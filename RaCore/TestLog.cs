@@ -427,6 +427,9 @@ public static class TestLog
                     ["arcRatio"] = Round(t.ArcRatio), ["lateralPathPx"] = Round(t.LateralPathPx),
                     ["reversals"] = t.PathReversals, ["perpPeakPx"] = Round(t.PerpPeakPx),
                     ["asymCoef"] = double.IsNaN(t.AsymCoef) ? null : Round(t.AsymCoef),
+                    // the pooled fit has to be recomputable from the file, so the raw sums go in
+                    ["asymNum"] = Round(t.AsymNum), ["asymDen"] = Round(t.AsymDen),
+                    ["angleRad"] = Round(t.AngleRad),
                 } : null,
             }).ToList(),
             ["patchApplied"] = string.IsNullOrWhiteSpace(d.AppliedPatch) ? null : d.AppliedPatch,

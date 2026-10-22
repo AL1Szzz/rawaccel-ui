@@ -178,15 +178,26 @@ public sealed class RoundStats
             s.ReversalsMean = Mean(prim.Select(x => (double)x.PathReversals).ToList());
             s.HookCount = prim.Count(x => x.PathReversals >= 1);
             // only diagonal aims can carry the axis signal (its weight is (ax*ay)^2), and the
-            // coefficient is meaningless when that product is near zero
-            var diag = prim.Where(x => !double.IsNaN(x.AsymCoef) &&
-                                       Math.Abs(Math.Cos(x.AngleRad) * Math.Sin(x.AngleRad)) >= 0.15).ToList();
-            s.AsymN = diag.Count;
-            if (diag.Count >= 8)
+            // coefficient is meaningless when that product is near zero.
+            // Pool the fit across diagonal flicks and fit ONCE. Averaging the per-flick slopes is
+            // not an estimator: a near-axis flick divides by almost nothing, so its ratio is
+            // arbitrary and one such sample can move the round's answer by more than the effect
+            // being looked for (measured: same config, per-round e from +0.11 to -0.37).
+            bool Diagonal(Trial x) => x.AsymDen > 0 && !double.IsNaN(x.AsymCoef) &&
+                                      Math.Abs(Math.Cos(x.AngleRad) * Math.Sin(x.AngleRad)) >= 0.15;
+            double aNum = 0, aDen = 0; int nFit = 0;
+            foreach (var x in prim)
+                if (Diagonal(x)) { aNum += x.AsymNum; aDen += x.AsymDen; nFit++; }
+            s.AsymN = nFit;
+            if (nFit >= 8 && aDen > 0)
             {
-                var c = diag.Select(x => x.AsymCoef).ToList();
-                s.AsymMean = Mean(c);
-                s.AsymSem = c.Count > 1 ? StdDev(c) / Math.Sqrt(c.Count) : 0;
+                s.AsymMean = aNum / aDen;
+                // Var(per-flick slope) = sigma^2 / den_i, so the per-flick scatter weighted by its
+                // own den recovers sigma, and SE(pooled slope) = sigma / sqrt(sum of den).
+                double ss = 0;
+                foreach (var x in prim)
+                    if (Diagonal(x)) { double dv = x.AsymCoef - s.AsymMean; ss += dv * dv * x.AsymDen; }
+                s.AsymSem = Math.Sqrt(ss / (nFit - 1) / aDen);
             }
 
             // a "duration" longer than the round itself is an absolute timestamp that escaped a
