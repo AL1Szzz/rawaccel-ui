@@ -13,6 +13,10 @@
             <TextBlock Text="曲线与参数" Style="{StaticResource TitleTextStyle}"/>
             <TextBlock x:Name="Hint" Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"
                        Text="这条曲线就是驱动实际执行的映射。单位是 counts/ms（DPI 归一化关闭时）；改成物理单位需在“设备”里填 DPI。"/>
+
+            <!-- 档位：一键把存好的曲线写进驱动，走和“写入驱动”同一套 校验→写→回读→退回 -->
+            <WrapPanel x:Name="PresetBar" Margin="0,8,0,0"/>
+            <TextBlock x:Name="LivePreset" Style="{StaticResource SubtleTextStyle}" Margin="0,5,0,0" Text=""/>
         </StackPanel>
 
         <Grid Grid.Row="1">

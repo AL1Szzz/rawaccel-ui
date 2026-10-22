@@ -687,7 +687,114 @@ public sealed class AppState : INotifyPropertyChanged
         finally { Busy = false; Raise(nameof(CanWrite)); }
     }
 
-    // ---------- curve math (identical to the driver's own headers) ----------
+    // ---------- presets: one click to put a saved curve into the driver ----------
+
+    /// <summary>
+    /// Sha of the profile the driver is serving the mouse right now, read back from the driver
+    /// (never inferred from what we last wrote - an external writer, another login, or a dropped
+    /// write all make the two disagree, and the whole point of the preset bar is to show the truth).
+    /// </summary>
+    public string LiveProfileSha { get; private set; } = "";
+
+    /// <summary>The first attached mouse, as the driver identifies it. Null when enumeration fails.</summary>
+    string MouseDeviceId()
+    {
+        try { return EnumerateDevices().FirstOrDefault()?.Id; } catch { return null; }
+    }
+
+    public List<RaCore.Preset> ListPresets() => RaCore.Presets.List();
+
+    /// <summary>Reads the driver. No write, no state change beyond the sha string.</summary>
+    public void RefreshLiveSha()
+    {
+        if (!DriverReachable) { SetLiveSha(""); return; }
+        try
+        {
+            var live = Convert4.ReadBlob(RaDevice.Read());
+            int idx = RaCore.Presets.TargetIndex(live, MouseDeviceId());
+            SetLiveSha(idx < live.Profiles.Count ? ConfigHash.Of(live.Profiles[idx]) : "");
+        }
+        catch (Exception e) { SetLiveSha(""); Status = "读驱动失败：" + e.Message; }
+    }
+
+    /// <summary>Raise only on an actual change: the curve page rebuilds its preset bar from this
+    /// property, and it also reads the driver to fill it, so an unconditional Raise loops.</summary>
+    void SetLiveSha(string sha)
+    {
+        if (string.Equals(LiveProfileSha, sha, StringComparison.Ordinal)) return;
+        LiveProfileSha = sha;
+        Raise(nameof(LiveProfileSha));
+    }
+
+    /// <summary>
+    /// Put a preset into the slot the mouse resolves to and write it through the SAME path as the
+    /// "write to driver" button: validate, write, read back, and roll the bytes back if the read
+    /// back does not match. The profile NAME is kept (only its contents are replaced) because
+    /// device entries reference profiles by name - renaming the slot would dangle those pointers.
+    /// </summary>
+    public async Task<bool> ApplyPresetAsync(string name)
+    {
+        var found = ListPresets().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (found == null) { Status = "没有这个档位：" + name; return false; }
+        var prof = RaCore.Presets.TryLoad(found.File);
+        if (prof == null) { Status = "档位文件读不出来：" + found.File; return false; }
+
+        int idx = RaCore.Presets.TargetIndex(doc, MouseDeviceId());
+        if (idx >= doc.Profiles.Count) { Status = "文档里没有可写入的 profile"; return false; }
+        var before = doc.Profiles[idx].Clone();
+        prof.Name = before.Name;
+
+        doc.Profiles[idx] = prof;
+        Profiles[idx] = prof;
+        SelectedProfile = prof;
+        Touch();
+
+        bool ok = await WriteToDriverAsync();
+        if (!ok)
+        {
+            doc.Profiles[idx] = before;
+            Profiles[idx] = before;
+            SelectedProfile = before;
+            Touch();
+            Status = "档位 " + name + " 没写成，已退回原来的配置（" + ConfigHash.Of(before) + "）";
+            return false;
+        }
+        Status = $"档位 {name} 已写入并回读一致（{ConfigHash.Of(prof)}）· 鼠标可能卡了一下";
+        RefreshLiveSha();
+        return true;
+    }
+
+    public void SavePreset(string name)
+    {
+        var p = SelectedProfile ?? doc.Profiles.FirstOrDefault();
+        if (p == null) { Status = "没有可保存的 profile"; return; }
+        var file = RaCore.Presets.Save(name, p, out string err);
+        Status = err.Length > 0 ? err : "已存为档位 " + Path.GetFileNameWithoutExtension(file) + "（" + ConfigHash.Of(p) + "）";
+    }
+
+    public void DeletePreset(string name)
+    {
+        if (!RaCore.Presets.Delete(name, out string err)) Status = err;
+        else Status = "已删除档位 " + name;
+    }
+
+    /// <summary>
+    /// Bring the experiment files from the repo's curves\ folder into the library, so the A/B/V
+    /// snapshots made over the last two days do not stay a second, disconnected set of configs.
+    /// </summary>
+    public int ImportCurveFiles()
+    {
+        string dir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "curves"));
+        if (!Directory.Exists(dir)) { Status = "没有找到 curves 目录：" + dir; return 0; }
+        int n = 0;
+        foreach (var f in Directory.GetFiles(dir, "*.json"))
+        {
+            string name = Path.GetFileNameWithoutExtension(f);
+            if (RaCore.Presets.Import(f, name, out _) != null) n++;
+        }
+        Status = n > 0 ? $"从 curves 导入 {n} 个档位（库里同名的已被覆盖）" : "curves 里没有能导入的文件";
+        return n;
+    }
 
     // ---------- curve math (identical to the driver's own headers) ----------
 

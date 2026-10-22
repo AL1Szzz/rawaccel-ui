@@ -53,9 +53,159 @@ public partial class CurvePage : UserControl
         {
             if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.Series))
                 Dispatcher.Invoke(RefreshValues);
+            // the preset bar only needs a rebuild when the selection or the driver changed:
+            // Series updates with the telemetry timer and must not re-read the driver that often
+            if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.LiveProfileSha)
+                                             or nameof(AppState.CanWrite))
+                Dispatcher.Invoke(RebuildPresetBar);
         };
 
-        Loaded += (_, _) => RefreshValues();
+        Loaded += (_, _) => { RefreshValues(); RebuildPresetBar(); };
+    }
+
+    // ---------- 档位栏 ----------
+
+    string armedPreset = "";
+    DateTime armedAt;
+    TextBox txtPresetName;
+
+    Brush Tertiary() => (Brush)FindResource("TextTertiaryBrush");
+
+    /// <summary>
+    /// One button per saved curve, and a dot on the one the driver actually reports right now.
+    /// A click arms the button; a second click within six seconds writes. This exists because a
+    /// preset switch moves the mouse for about a second, and it should never happen on a stray
+    /// click while he is mid-spray - without popping a modal that would take focus.
+    /// </summary>
+    void RebuildPresetBar()
+    {
+        if (PresetBar == null || rebuildingBar) return;
+        rebuildingBar = true;
+        try { RebuildPresetBarInner(); }
+        finally { rebuildingBar = false; }
+    }
+
+    bool rebuildingBar;
+
+    void RebuildPresetBarInner()
+    {
+        if (PresetBar == null) return;
+        PresetBar.Children.Clear();
+        PresetBar.Children.Add(new TextBlock
+        {
+            Text = "档位", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4),
+            Foreground = Tertiary()
+        });
+
+        App.State.RefreshLiveSha();
+        var list = App.State.ListPresets();
+        if (list.Count == 0)
+            PresetBar.Children.Add(new TextBlock
+            {
+                Text = "（还没有存过档位）", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4),
+                Foreground = Tertiary()
+            });
+
+        foreach (var p in list)
+        {
+            bool live = string.Equals(p.Sha, App.State.LiveProfileSha, StringComparison.OrdinalIgnoreCase);
+            bool armed = string.Equals(armedPreset, p.Name, StringComparison.OrdinalIgnoreCase);
+            var b = new Button
+            {
+                Content = (live ? "● " : "○ ") + p.Name + (armed ? "（再点一次写入）" : ""),
+                Tag = p.Name,
+                Margin = new Thickness(0, 0, 6, 4),
+                Padding = new Thickness(9, 3, 9, 3),
+                FontWeight = live ? FontWeights.Bold : FontWeights.Normal,
+                ToolTip = $"{p.Sha}\n{p.Summary}\n文件 {p.File}",
+                IsEnabled = App.State.DriverReachable && !App.State.Busy,
+            };
+            b.Click += OnPreset;
+            PresetBar.Children.Add(b);
+        }
+
+        txtPresetName = new TextBox
+        {
+            Width = 104,
+            Margin = new Thickness(10, 0, 4, 4),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Text = SuggestedPresetName(),
+            ToolTip = "把界面现在这份（含未写入的草稿）存成档位用的名字",
+        };
+        PresetBar.Children.Add(txtPresetName);
+
+        var save = new Button { Content = "存为档位", Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(9, 3, 9, 3) };
+        save.Click += OnSavePreset;
+        PresetBar.Children.Add(save);
+
+        var del = new Button { Content = "删除", Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(9, 3, 9, 3) };
+        del.Click += OnDeletePreset;
+        PresetBar.Children.Add(del);
+
+        var imp = new Button { Content = "导入 curves", Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(9, 3, 9, 3), ToolTip = "把仓库 curves\\*.json 里的实验配置读进档位库" };
+        imp.Click += OnImportCurves;
+        PresetBar.Children.Add(imp);
+
+        LivePreset.Text = App.State.DriverReachable
+            ? $"驱动现在 = {(string.IsNullOrEmpty(App.State.LiveProfileSha) ? "读不到" : App.State.LiveProfileSha)}" +
+              $"（{NameOfLive(list)}）· 点档位=两次点击后写入，写不进会自动退回"
+            : "驱动没连上：档位栏只能存取，不能写入";
+    }
+
+    static string NameOfLive(List<RaCore.Preset> list)
+    {
+        var hit = list.FirstOrDefault(p => string.Equals(p.Sha, App.State.LiveProfileSha, StringComparison.OrdinalIgnoreCase));
+        return hit == null ? "不在档位库里" : "就是「" + hit.Name + "」";
+    }
+
+    string SuggestedPresetName()
+    {
+        var p = App.State.SelectedProfile;
+        if (p == null) return "档位";
+        string short6 = RaCore.ConfigHash.Of(p);
+        return "档位-" + short6[..6];
+    }
+
+    async void OnPreset(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b) return;
+        string name = (string)b.Tag;
+
+        if (!string.Equals(armedPreset, name, StringComparison.OrdinalIgnoreCase) || (DateTime.Now - armedAt).TotalSeconds > 6)
+        {
+            armedPreset = name; armedAt = DateTime.Now;
+            App.State.Status = $"再点一次「{name}」就写入驱动（鼠标可能卡一秒）。点别的或等六秒就取消。";
+            RebuildPresetBar();
+            return;
+        }
+
+        armedPreset = "";
+        await App.State.ApplyPresetAsync(name);
+        RebuildPresetBar();
+    }
+
+    void OnSavePreset(object sender, RoutedEventArgs e)
+    {
+        App.State.SavePreset(txtPresetName?.Text ?? "");
+        armedPreset = "";
+        RebuildPresetBar();
+    }
+
+    void OnDeletePreset(object sender, RoutedEventArgs e)
+    {
+        string name = txtPresetName?.Text?.Trim() ?? "";
+        var hit = App.State.ListPresets().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (hit == null) { App.State.Status = "先在名字框里写要删除的档位名（点档位按钮也能看到名字）"; return; }
+        App.State.DeletePreset(hit.Name);
+        armedPreset = "";
+        RebuildPresetBar();
+    }
+
+    void OnImportCurves(object sender, RoutedEventArgs e)
+    {
+        App.State.ImportCurveFiles();
+        armedPreset = "";
+        RebuildPresetBar();
     }
 
     // ---------- axis-specific parameters ----------
@@ -340,7 +490,9 @@ public partial class CurvePage : UserControl
     {
         bool open = ParamCard.Visibility != Visibility.Visible;
         ParamCard.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        BtnParams.Content = open ? "收起参数 25b4" : "调整参数 25be";
+        // escaped, not literal: this line used to print "调整参数 25be" because a bare
+        // 25be in a normal string is just text. The XAML label uses the real glyph.
+        BtnParams.Content = open ? "收起参数 \u25B4" : "调整参数 \u25BE";
     }
 
     void OnSamples(object sender, RoutedEventArgs e)
