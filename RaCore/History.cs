@@ -96,9 +96,23 @@ public static class History
         if (newer.Balls != older.Balls) conds.Add($"球数 {older.Balls}→{newer.Balls}");
         if (Math.Abs(newer.RadiusPx - older.RadiusPx) > 0.5) conds.Add($"球半径 {older.RadiusPx:0}→{newer.RadiusPx:0}px");
 
+        // A/B/A detection: the newest group repeats the config from two groups back, so the last
+        // switch was a return to baseline. Comparing "newest vs previous" there reads the revert
+        // as if it were the change under test, which points at the wrong arm entirely.
+        var back = groups.Count >= 3 ? groups[2] : null;
+        bool isReturn = !sameSha && back != null
+            && string.Equals(back.Sha, newer.Sha, StringComparison.OrdinalIgnoreCase)
+            && back.Mode == newer.Mode && back.Balls == newer.Balls
+            && Math.Abs(back.DistancePx - newer.DistancePx) <= 1;
+
         if (sameSha)
         {
             lines.Add($"两组配置相同（{Sha(newer.Sha)}）：下面的差异只是你的状态波动（热身/疲劳），不是参数效果。");
+        }
+        else if (isReturn)
+        {
+            lines.Add($"最近三组是 A→B→A（{Sha(back!.Sha)} → {Sha(older.Sha)} → {Sha(newer.Sha)}）：新组是回到基线，不是新改动。" +
+                      "按 A/B/A 算：改动效果 = B 对两侧 A 的合并中位，噪声底 = 两侧 A 自己差多少。");
         }
         else if (conds.Count > 0)
         {
@@ -112,7 +126,21 @@ public static class History
         double dHit = newer.MedianHit - older.MedianHit;
         double dPace = newer.MedianPace - older.MedianPace;
         double dRad = newer.MedianRadial - older.MedianRadial;
-        if (sameSha)
+        if (isReturn)
+        {
+            var a = back!.Rounds.Concat(newer.Rounds).ToList();
+            double aHit = a.Select(r => r.HitRate).Median();
+            double aPace = a.Select(r => r.KillsPerMinute).Median();
+            double aRad = a.Select(r => r.RadialMedian).Median();
+            double floorHit = Math.Abs(newer.MedianHit - back.MedianHit);
+            double floorPace = Math.Abs(newer.MedianPace - back.MedianPace);
+            double floorRad = Math.Abs(newer.MedianRadial - back.MedianRadial);
+            lines.Add($"两侧 A 自己差：命中 ±{floorHit:0.0}pp · 节奏 ±{floorPace:0.0} · 径向 ±{floorRad:0.0}pp —— 这是今晚实测的噪声底，比它小就测不出来");
+            lines.Add(Verdict("命中 A→B", aHit, older.MedianHit, "pp", Math.Max(HitNoisePp, floorHit)));
+            lines.Add(Verdict("节奏 A→B", aPace, older.MedianPace, "球/分", Math.Max(PaceNoise, floorPace)));
+            lines.Add(Verdict("径向中位 A→B", aRad, older.MedianRadial, "%", Math.Max(RadialNoisePp, floorRad)));
+        }
+        else if (sameSha)
         {
             lines.Add($"命中 {older.MedianHit:0.0}→{newer.MedianHit:0.0}%（{dHit:+0.0;-0.0}pp）   节奏 {older.MedianPace:0.0}→{newer.MedianPace:0.0} 球/分   径向中位 {older.MedianRadial:+0.0;-0.0}→{newer.MedianRadial:+0.0;-0.0}%");
         }

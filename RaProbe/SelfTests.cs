@@ -1075,6 +1075,34 @@ public static class SelfTests
         var v4 = History.CompareNewestTwo(conf);
         Check(v4.Any(l => l.Contains("不能全归因")), "a setup change between groups kills the attribution");
 
+        // A/B/A: the newest group is a REVERT to the config from two groups back. Reading
+        // newest-vs-previous there blames the change for what is actually warm-up drift.
+        var aba = new List<RoundSummary>
+        {
+            // A_new (16:00 on the 22nd) - the arm that came back
+            RS("n1", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 16:00:00", 70, 95, 0.0),
+            RS("n2", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 16:01:00", 70, 95, 0.0),
+            RS("n3", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 16:02:00", 70, 95, 0.0),
+            // B (15:00) - the change under test
+            RS("m1", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-22 15:00:00", 60, 90, 0.0),
+            RS("m2", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-22 15:01:00", 60, 90, 0.0),
+            RS("m3", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-22 15:02:00", 60, 90, 0.0),
+            // A_old (14:00) - same config as A_new, 20pp lower: that gap IS the noise floor
+            RS("o1", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 14:00:00", 50, 85, 0.0),
+            RS("o2", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 14:01:00", 50, 85, 0.0),
+            RS("o3", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 14:02:00", 50, 85, 0.0),
+        };
+        var abaGroups = History.Group(aba);
+        Check(abaGroups.Count == 3 && abaGroups[0].Sha == "aaaaaaaa11" && abaGroups[2].Sha == "aaaaaaaa11",
+            $"A/B/A stays three groups with the revert separate ({abaGroups.Count})");
+        var vAba = History.CompareNewestTwo(aba);
+        Check(vAba.Any(l => l.Contains("A→B→A")), "the revert is named as a revert, not as a new change");
+        Check(!vAba.Any(l => l.Contains("差值来自这次改动")), "A/B/A never attributes the newest gap to 'this change'");
+        Check(vAba.Any(l => l.Contains("两侧 A 自己差") && l.Contains("±20.0pp")),
+            $"the two A arms set the noise floor: {string.Join(" | ", vAba.Where(l => l.Contains("两侧 A")))}");
+        Check(vAba.Any(l => l.Contains("命中 A→B") && l.Contains("测不出差别")),
+            "B sits on the pooled A median, so the +10pp that newest-vs-previous would have called an effect is refused");
+
         // open-loop availability marker
         var stale = new RoundSummary { File = "x", ConfigSha = "a", Quality = { "IMPLIANT: 49 flicks ended on the ball yet their reconstructed path only reached 82% of the distance - the reconstruction is losing pointer travel, so max_extent/prim numbers this round are lower bounds" } };
         var stale2 = new RoundSummary { File = "y", ConfigSha = "a", Quality = { "IMPLIANT: 59 flicks had no second surge yet their initial impulse is reported -26.0% off the target" } };
