@@ -253,29 +253,36 @@ internal static class PollJitter
             cells.ToArray(), "");
     }
 
+    static readonly List<string> report = new();
+
+    /// <summary>Print and remember: the same text goes to a file, so reading the result never
+    /// depends on the console staying un-paused, un-scrolled and un-closed.</summary>
+    static void Say(string s) { Console.WriteLine(s); report.Add(s); }
+    static void Say() => Say("");
+
     static void Analyze(double seconds, string settingsPath)
     {
-        Console.WriteLine();
+        Say();
         JitterReport? r;
         try { r = Measure(pkts, settingsPath); }
-        catch (Exception e) { Console.WriteLine("只报抖动，不报增益：" + e.Message); return; }
-        if (r == null) { Console.WriteLine($"包数 {pkts.Count}，太少或移动太断续，结论不成立"); return; }
+        catch (Exception e) { Say("只报抖动，不报增益：" + e.Message); return; }
+        if (r == null) { Say($"包数 {pkts.Count}，太少或移动太断续，结论不成立"); return; }
 
-        Console.WriteLine($"包数 {r.Packets} / {seconds:0.0}s   间隔样本 {r.Gaps}");
-        Console.WriteLine($"包间隔 ms: p50 {r.MedUs / 1000:0.000}  p90 {r.P90Us / 1000:0.000}  " +
+        Say($"包数 {r.Packets} / {seconds:0.0}s   间隔样本 {r.Gaps}");
+        Say($"包间隔 ms: p50 {r.MedUs / 1000:0.000}  p90 {r.P90Us / 1000:0.000}  " +
                           $"p99 {r.P99Us / 1000:0.000}  max {r.MaxUs / 1000:0.000}");
-        Console.WriteLine($"等效轮询率(按 p50): {r.Hz:0} Hz");
-        Console.WriteLine($"   比 p50 慢 1.5/2/3/5 倍以上的包: {r.Slow15:0.0}% / {r.Slow20:0.0}% / {r.Slow30:0.0}% / {r.Slow50:0.0}%");
+        Say($"等效轮询率(按 p50): {r.Hz:0} Hz");
+        Say($"   比 p50 慢 1.5/2/3/5 倍以上的包: {r.Slow15:0.0}% / {r.Slow20:0.0}% / {r.Slow30:0.0}% / {r.Slow50:0.0}%");
 
-        Console.WriteLine();
-        Console.WriteLine("把「包迟到」折算成增益损失（速度被低估 k 倍 → 查表查到 k 倍更慢的地方）：");
-        Console.WriteLine("  真实输入速度   理想增益    抖动下平均增益    平均损失   损失>5%的包");
+        Say();
+        Say("把「包迟到」折算成增益损失（速度被低估 k 倍 → 查表查到 k 倍更慢的地方）：");
+        Say("  真实输入速度   理想增益    抖动下平均增益    平均损失   损失>5%的包");
         foreach (var c in r.Gain)
-            Console.WriteLine($"   {c.Speed,4:0} c/ms     {c.Ideal,7:0.000}      {c.Avg,7:0.000}      " +
+            Say($"   {c.Speed,4:0} c/ms     {c.Ideal,7:0.000}      {c.Avg,7:0.000}      " +
                               $"{c.LossPct,+6:0.1}%   {c.BadPct,5:0.0}%");
-        Console.WriteLine();
-        Console.WriteLine("注：这是用户态时间戳，含本进程调度抖动，驱动看不到那部分 —— 当作上界看；");
-        Console.WriteLine("    但「空载 vs 开游戏」两次对比是公平的，偏差两边一样。");
+        Say();
+        Say("注：这是用户态时间戳，含本进程调度抖动，驱动看不到那部分 —— 当作上界看；");
+        Say("    但「空载 vs 开游戏」两次对比是公平的，偏差两边一样。");
 
         var csv = Path.Combine(Path.GetTempPath(), $"poll-jitter-{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.csv");
         using (var w = new StreamWriter(csv))
@@ -283,6 +290,19 @@ internal static class PollJitter
             w.WriteLine("us,dx,dy");
             foreach (var p in pkts) w.WriteLine(p.us.ToString(CultureInfo.InvariantCulture) + "," + p.dx + "," + p.dy);
         }
-        Console.WriteLine("原始逐包记录已写: " + csv);
+        Say("原始逐包记录已写: " + csv);
+
+        // Same text to a file under the app's data folder. The user should never have to select,
+        // copy and paste console output to get an answer - the window can be closed, scrolled or
+        // paused by QuickEdit, and the assistant can read the file directly.
+        try
+        {
+            var dir = Path.Combine(AppData.Root, "jitter");
+            Directory.CreateDirectory(dir);
+            var txt = Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
+            File.WriteAllText(txt, string.Join(Environment.NewLine, report) + Environment.NewLine);
+            Say("文字报告已写: " + txt);
+        }
+        catch (Exception e) { Say("文字报告没能保存: " + e.Message); }
     }
 }
