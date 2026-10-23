@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -166,12 +167,28 @@ function meta(dir) {
     const j = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
     return {
       label,
-      sha: String(j.aggregates && j.aggregates.configSha || '').slice(0, 6),
+      sha: String(j.aggregates && j.aggregates.configSha || ''),
       demo: String(j.meta && j.meta.demo || path.basename(dir)).replace(/[\\/]+/g, '/').toLowerCase(),
     };
   } catch {
     return { label, sha: '', demo: path.basename(dir) };
   }
+}
+
+/// A report column labelled "c63b44" means nothing to the person who has to decide whether to
+/// keep the curve, so the config hash is mapped back to the name he gave it in the app.
+/// Falls back to the hash when RaProbe is not reachable (or the curve was never saved).
+let nameBySha = null;
+function curveNames() {
+  if (nameBySha) return nameBySha;
+  nameBySha = {};
+  try {
+    const exe = path.join(HERE, 'app', 'RaProbe.exe');
+    if (!fs.existsSync(exe)) return nameBySha;
+    const out = execFileSync(exe, ['--curve-name'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+    for (const m of out.matchAll(/可切换：(.+?) \[([0-9a-fA-F]{12})\]/g)) nameBySha[m[2]] = m[1].trim();
+  } catch { /* hex labels still work */ }
+  return nameBySha;
 }
 
 function resolve(arg) {
@@ -206,12 +223,18 @@ function main() {
   }
   if (set.length === 0) { console.log(L.join('\n')); return 2; }
 
+  const COL = 20;      // wide enough for a Chinese curve name next to the session time
+  // CJK glyphs are two cells wide in a console but one character in JS, so String.padStart
+  // misaligns a table whose headers are Chinese. Measure the printed width instead.
+  const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︐-︙＀-｠￠-￦]/;
+  const wide = (s) => [...String(s)].reduce((n, ch) => n + (WIDE.test(ch) ? 2 : 1), 0);
+  const pad = (s, n) => ' '.repeat(Math.max(0, n - wide(s))) + s;
   const row = (name, get, fmt2 = v => (Number.isFinite(v) ? v.toFixed(1) : '—')) => {
-    L.push(name.padEnd(24) + set.map(s => fmt2(get(s), s).padStart(13)).join(''));
+    L.push(name.padEnd(24) + set.map(s => pad(fmt2(get(s), s), COL)).join(''));
   };
   const maybe = (v, s) => (Number.isFinite(v) ? Math.round(v) : 0) + (s.exactKills ? '' : '~');
   const maybe2 = (v, s) => (Number.isFinite(v) ? v.toFixed(2) : '—') + (s.exactKills ? '' : '~');
-  L.push(' '.padEnd(24) + set.map(s => `${s.label} ${s.sha}`.padStart(13)).join(''));
+  L.push(' '.padEnd(24) + set.map(s => pad(`${s.label} ${curveNames()[s.sha] || s.sha.slice(0,6)}`, COL)).join(''));
   L.push('');
   row('gun shots', s => s.shots, v => String(Math.round(v)));
   row('aggregate hit %', s => s.hitPct);
@@ -229,13 +252,13 @@ function main() {
   L.push('');
   L.push('--- where the hits sit, by magazine depth (share of the hits) ---');
   row('head  1-10 / 11-20 / 21-30', s => s.head1, v => `${fmt(v)}`);
-  L.push(' '.padEnd(24) + set.map(s => `${fmt(s.head2)}/${fmt(s.head3)}`.padStart(13)).join(''));
+  L.push(' '.padEnd(24) + set.map(s => pad(`${fmt(s.head2)}/${fmt(s.head3)}`, COL)).join(''));
   row('torso 1-10 / 11-20 / 21-30', s => s.torso1);
-  L.push(' '.padEnd(24) + set.map(s => `${fmt(s.torso2)}/${fmt(s.torso3)}`.padStart(13)).join(''));
+  L.push(' '.padEnd(24) + set.map(s => pad(`${fmt(s.torso2)}/${fmt(s.torso3)}`, COL)).join(''));
   row('limb  1-10 / 11-20 / 21-30', s => s.limb1);
-  L.push(' '.padEnd(24) + set.map(s => `${fmt(s.limb2)}/${fmt(s.limb3)}`.padStart(13)).join(''));
+  L.push(' '.padEnd(24) + set.map(s => pad(`${fmt(s.limb2)}/${fmt(s.limb3)}`, COL)).join(''));
   row('hit%  1-10 / 11-20 / 21-30', s => s.rate1);
-  L.push(' '.padEnd(24) + set.map(s => `${fmt(s.rate2)}/${fmt(s.rate3)}`.padStart(13)).join(''));
+  L.push(' '.padEnd(24) + set.map(s => pad(`${fmt(s.rate2)}/${fmt(s.rate3)}`, COL)).join(''));
   L.push('');
   L.push('--- how to read this ---');
   L.push('recoil climbs: head share RISING with depth = under-compensated, limb share rising =');

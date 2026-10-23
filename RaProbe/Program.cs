@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using RaCore;
+using RaCore.Model;
 
 namespace RaProbe;
 
@@ -28,6 +29,28 @@ internal static class Program
         if (args.Contains("--rawinput-probe"))
         {
             RawInputProbe.Run(args);
+            return;
+        }
+
+        // "Which curve is in the driver right now, in words." The read-only counterpart of the UI's
+        // curve list, printed by name rather than by hex - the hex codes were the complaint.
+        if (args.Contains("--curve-name"))
+        {
+            try
+            {
+                var live = Convert4.ReadBlob(RaDevice.Read());
+                if (live.Profiles.Count == 0) { Console.WriteLine("驱动里没有任何 profile"); Environment.Exit(2); return; }
+                string sha = ConfigHash.Of(live.Profiles[0]);
+                var saved = Presets.List();
+                var hit = saved.FirstOrDefault(p => string.Equals(p.Sha, sha, StringComparison.OrdinalIgnoreCase));
+                Console.WriteLine(hit != null
+                    ? $"驱动里跑的是「{hit.Name}」：{hit.Summary}"
+                    : $"驱动里是一份没存过的配置（{sha}）：{Presets.Describe(live.Profiles[0])}");
+                // the sha is in this line on purpose: field/spray-bursts.mjs maps it onto the
+                // column labels of a demo report, and a report with only hex is what he objected to
+                foreach (var p in saved) Console.WriteLine($"  可切换：{p.Name} [{p.Sha}]　{p.Summary}");
+            }
+            catch (Exception e) { Console.WriteLine("读驱动失败：" + e.Message); Environment.Exit(1); }
             return;
         }
 

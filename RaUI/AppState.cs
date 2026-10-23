@@ -735,9 +735,9 @@ public sealed class AppState : INotifyPropertyChanged
     public async Task<bool> ApplyPresetAsync(string name)
     {
         var found = ListPresets().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (found == null) { Status = "没有这个档位：" + name; return false; }
+        if (found == null) { Status = "列表里没有这条曲线：" + name; return false; }
         var prof = RaCore.Presets.TryLoad(found.File);
-        if (prof == null) { Status = "档位文件读不出来：" + found.File; return false; }
+        if (prof == null) { Status = "这条曲线的文件读不出来：" + found.File; return false; }
 
         int idx = RaCore.Presets.TargetIndex(doc, MouseDeviceId());
         if (idx >= doc.Profiles.Count) { Status = "文档里没有可写入的 profile"; return false; }
@@ -756,10 +756,10 @@ public sealed class AppState : INotifyPropertyChanged
             Profiles[idx] = before;
             SelectedProfile = before;
             Touch();
-            Status = "档位 " + name + " 没写成，已退回原来的配置（" + ConfigHash.Of(before) + "）";
+            Status = $"「{name}」没写成，已退回原来的配置（{ConfigHash.Of(before)}）";
             return false;
         }
-        Status = $"档位 {name} 已写入并回读一致（{ConfigHash.Of(prof)}）· 鼠标可能卡了一下";
+        Status = $"「{name}」已写入并回读一致（{ConfigHash.Of(prof)}）· 鼠标可能卡了一下";
         RefreshLiveSha();
         return true;
     }
@@ -769,30 +769,47 @@ public sealed class AppState : INotifyPropertyChanged
         var p = SelectedProfile ?? doc.Profiles.FirstOrDefault();
         if (p == null) { Status = "没有可保存的 profile"; return; }
         var file = RaCore.Presets.Save(name, p, out string err);
-        Status = err.Length > 0 ? err : "已存为档位 " + Path.GetFileNameWithoutExtension(file) + "（" + ConfigHash.Of(p) + "）";
+        Status = err.Length > 0 ? err
+            : "已存下「" + Path.GetFileNameWithoutExtension(file) + "」。想换名字就先删掉再存一次。";
     }
 
     public void DeletePreset(string name)
     {
         if (!RaCore.Presets.Delete(name, out string err)) Status = err;
-        else Status = "已删除档位 " + name;
+        else Status = "已删掉「" + name + "」（驱动没动）";
     }
 
+    /// <summary>File-name to readable-label map for the experiment files made before the curve
+    /// list existed. Anything not listed is imported under its own file name.</summary>
+    static readonly Dictionary<string, (string label, string note)> CurveRename = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["A-accel0.06"] = ("基线", "你用了大半年的原样：横向 3 起加速、强度 0.06、最多 1.97 倍；纵向不额外加成。怀疑哪次改动有问题，就切回这条当对照。"),
+        ["V-yx1.25"] = ("压枪 1.25", "只把纵向输出整体乘 1.25（等效垂直灵敏度 1.5→1.875），横向和加速曲线都不动。压枪时同样的手下压，准星多走 25%；觉得过头就再存一条 1.2 或 1.15。"),
+        ["B-accel0.12"] = ("横向加倍（旧实验）", "横向加速强度 0.06→0.12，其余同基线。这条当时没做完，留着当备选。"),
+        // Y-yoffset0.75 is deliberately NOT imported: the 2026-10-22 A/B/A showed the Y accel
+        // curve cannot reach spray speeds at all, so offering it as a curve only adds a button
+        // that does nothing. It stays in git and in curves\ if it is ever needed again.
+    };
+
     /// <summary>
-    /// Bring the experiment files from the repo's curves\ folder into the library, so the A/B/V
-    /// snapshots made over the last two days do not stay a second, disconnected set of configs.
+    /// Bring the experiment files from the repo's curves\ folder into the list, under readable
+    /// names, so the snapshots made over the last two days are not a second disconnected set.
     /// </summary>
     public int ImportCurveFiles()
     {
         string dir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "curves"));
         if (!Directory.Exists(dir)) { Status = "没有找到 curves 目录：" + dir; return 0; }
-        int n = 0;
+        int n = 0, skipped = 0;
         foreach (var f in Directory.GetFiles(dir, "*.json"))
         {
-            string name = Path.GetFileNameWithoutExtension(f);
-            if (RaCore.Presets.Import(f, name, out _) != null) n++;
+            string key = Path.GetFileNameWithoutExtension(f);
+            var hit = CurveRename.TryGetValue(key, out var mapped) ? mapped : (key, "");
+            if (hit.Item1.Length == 0) { skipped++; continue; }
+            if (RaCore.Presets.Import(f, hit.Item1, out _, hit.Item2) != null) n++;
         }
-        Status = n > 0 ? $"从 curves 导入 {n} 个档位（库里同名的已被覆盖）" : "curves 里没有能导入的文件";
+        Status = n > 0
+            ? $"从 curves 导入 {n} 条曲线" + (skipped > 0 ? $"，跳过 {skipped} 条已判定无效的旧实验" : "")
+            : "curves 里没有能导入的文件";
         return n;
     }
 

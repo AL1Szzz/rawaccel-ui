@@ -63,7 +63,7 @@ public partial class CurvePage : UserControl
         Loaded += (_, _) => { RefreshValues(); RebuildPresetBar(); };
     }
 
-    // ---------- 档位栏 ----------
+    // ---------- 曲线列表 ----------
 
     string armedPreset = "";
     DateTime armedAt;
@@ -72,11 +72,13 @@ public partial class CurvePage : UserControl
     Brush Tertiary() => (Brush)FindResource("TextTertiaryBrush");
 
     /// <summary>
-    /// One button per saved curve, and a dot on the one the driver actually reports right now.
-    /// A click arms the button; a second click within six seconds writes. This exists because a
-    /// preset switch moves the mouse for about a second, and it should never happen on a stray
-    /// click while he is mid-spray - without popping a modal that would take focus.
+    /// The curves he can switch between, named in Chinese by what they DO. The one the driver
+    /// reports right now gets a check mark; a click arms the button and a second click within six
+    /// seconds writes, because switching moves the mouse for about a second and must never happen
+    /// on a stray click mid-spray - and no modal dialog, which would take focus away from a game.
     /// </summary>
+    /// <summary>Re-entrancy guard: rebuilding reads the driver, and the driver read raises the
+    /// property this page listens to, so without it the bar would rebuild itself forever.</summary>
     void RebuildPresetBar()
     {
         if (PresetBar == null || rebuildingBar) return;
@@ -91,18 +93,21 @@ public partial class CurvePage : UserControl
     {
         if (PresetBar == null) return;
         PresetBar.Children.Clear();
+        PresetTools.Children.Clear();
+        App.State.RefreshLiveSha();
+        var list = App.State.ListPresets();
+
         PresetBar.Children.Add(new TextBlock
         {
-            Text = "档位", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4),
+            Text = "现在用的曲线", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 4),
             Foreground = Tertiary()
         });
 
-        App.State.RefreshLiveSha();
-        var list = App.State.ListPresets();
         if (list.Count == 0)
             PresetBar.Children.Add(new TextBlock
             {
-                Text = "（还没有存过档位）", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4),
+                Text = "（还没存过，先把眼下这份起个名字存下来）",
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4),
                 Foreground = Tertiary()
             });
 
@@ -112,58 +117,66 @@ public partial class CurvePage : UserControl
             bool armed = string.Equals(armedPreset, p.Name, StringComparison.OrdinalIgnoreCase);
             var b = new Button
             {
-                Content = (live ? "● " : "○ ") + p.Name + (armed ? "（再点一次写入）" : ""),
+                Content = (live ? "✓ " : "") + p.Name + (armed ? "　再点一次就写入" : ""),
                 Tag = p.Name,
                 Margin = new Thickness(0, 0, 6, 4),
-                Padding = new Thickness(9, 3, 9, 3),
+                Padding = new Thickness(10, 3, 10, 3),
                 FontWeight = live ? FontWeights.Bold : FontWeights.Normal,
-                ToolTip = $"{p.Sha}\n{p.Summary}\n文件 {p.File}",
+                ToolTip = $"{p.Summary}\n\n（给助手核对用）配置 {p.Sha}\n文件 {p.File}",
                 IsEnabled = App.State.DriverReachable && !App.State.Busy,
             };
             b.Click += OnPreset;
             PresetBar.Children.Add(b);
         }
 
+        // second line: what the live curve actually is, in words
+        var livePreset = list.FirstOrDefault(p => string.Equals(p.Sha, App.State.LiveProfileSha, StringComparison.OrdinalIgnoreCase));
+        LivePreset.Text = !App.State.DriverReachable
+            ? "驱动没连上：只能存取，不能写入"
+            : livePreset != null
+                ? $"驱动里跑的是「{livePreset.Name}」：{livePreset.Summary}"
+                : $"驱动里是一份没存过的配置（{Short(App.State.LiveProfileSha)}）：改满意了就起个中文名存下来";
+
+        // third line: the housekeeping, deliberately quieter than the switch buttons
         txtPresetName = new TextBox
         {
-            Width = 104,
-            Margin = new Thickness(10, 0, 4, 4),
+            Width = 132,
+            Margin = new Thickness(0, 0, 4, 4),
             VerticalContentAlignment = VerticalAlignment.Center,
             Text = SuggestedPresetName(),
-            ToolTip = "把界面现在这份（含未写入的草稿）存成档位用的名字",
+            ToolTip = "给现在界面里这份曲线起个中文名，比如「压枪 1.2」。这个名字就是列表里看到的按钮名。",
         };
-        PresetBar.Children.Add(txtPresetName);
+        PresetTools.Children.Add(txtPresetName);
 
-        var save = new Button { Content = "存为档位", Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(9, 3, 9, 3) };
-        save.Click += OnSavePreset;
-        PresetBar.Children.Add(save);
-
-        var del = new Button { Content = "删除", Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(9, 3, 9, 3) };
-        del.Click += OnDeletePreset;
-        PresetBar.Children.Add(del);
-
-        var imp = new Button { Content = "导入 curves", Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(9, 3, 9, 3), ToolTip = "把仓库 curves\\*.json 里的实验配置读进档位库" };
-        imp.Click += OnImportCurves;
-        PresetBar.Children.Add(imp);
-
-        LivePreset.Text = App.State.DriverReachable
-            ? $"驱动现在 = {(string.IsNullOrEmpty(App.State.LiveProfileSha) ? "读不到" : App.State.LiveProfileSha)}" +
-              $"（{NameOfLive(list)}）· 点档位=两次点击后写入，写不进会自动退回"
-            : "驱动没连上：档位栏只能存取，不能写入";
+        PresetTools.Children.Add(Tool("存为一条曲线", "把界面现在这份（含还没写入的草稿）按上面那个名字存进列表", OnSavePreset));
+        PresetTools.Children.Add(Tool("删除这条", "把上面输入框里写着的那条从列表里删掉（不动驱动）", OnDeletePreset));
+        PresetTools.Children.Add(Tool("从 curves 文件夹导入", "把仓库 curves\\*.json 里的旧实验配置读进列表", OnImportCurves));
     }
 
-    static string NameOfLive(List<RaCore.Preset> list)
+    Button Tool(string text, string tip, RoutedEventHandler onClick)
     {
-        var hit = list.FirstOrDefault(p => string.Equals(p.Sha, App.State.LiveProfileSha, StringComparison.OrdinalIgnoreCase));
-        return hit == null ? "不在档位库里" : "就是「" + hit.Name + "」";
+        var b = new Button
+        {
+            Content = text,
+            Margin = new Thickness(0, 0, 6, 4),
+            Padding = new Thickness(9, 3, 9, 3),
+            Foreground = Tertiary(),
+            ToolTip = tip,
+        };
+        b.Click += onClick;
+        return b;
     }
+
+    static string Short(string sha) => string.IsNullOrEmpty(sha) ? "读不到" : (sha.Length > 6 ? sha[..6] : sha);
 
     string SuggestedPresetName()
     {
         var p = App.State.SelectedProfile;
-        if (p == null) return "档位";
-        string short6 = RaCore.ConfigHash.Of(p);
-        return "档位-" + short6[..6];
+        if (p == null) return "新曲线";
+        // a name he can read back tomorrow, built from the one number that usually changes
+        if (Math.Abs(p.YxRatio - 1) > 1e-9) return $"压枪 {p.YxRatio.ToString("0.##", CultureInfo.InvariantCulture)}";
+        if (Math.Abs(p.X.Acceleration - 0.06) > 1e-9) return $"横向 {p.X.Acceleration.ToString("0.###", CultureInfo.InvariantCulture)}";
+        return "新曲线";
     }
 
     async void OnPreset(object sender, RoutedEventArgs e)
@@ -195,7 +208,7 @@ public partial class CurvePage : UserControl
     {
         string name = txtPresetName?.Text?.Trim() ?? "";
         var hit = App.State.ListPresets().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (hit == null) { App.State.Status = "先在名字框里写要删除的档位名（点档位按钮也能看到名字）"; return; }
+        if (hit == null) { App.State.Status = "先在名字框里写上要删的那条曲线的名字"; return; }
         App.State.DeletePreset(hit.Name);
         armedPreset = "";
         RebuildPresetBar();

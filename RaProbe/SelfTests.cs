@@ -1288,7 +1288,7 @@ public static class SelfTests
         try
         {
             // names double as file names, so nothing that could walk out of the library survives
-            Check(Presets.SafeName("  My Curve/v1 ") == "My_Curvev1", $"spaces and separators are handled: '{Presets.SafeName("  My Curve/v1 ")}'");
+            Check(Presets.SafeName("  My Curve/v1 ") == "My Curvev1", $"spaces are kept, separators dropped: '{Presets.SafeName("  My Curve/v1 ")}'");
             Check(Presets.SafeName("../../etc") == "etc", "a traversal attempt collapses to a plain word");
             Check(Presets.SafeName("###") == "", "pure punctuation yields an empty name, which Save then refuses");
             Check(Presets.SafeName(new string('x', 90)).Length == 40, "a long name is cut, not rejected mid-write");
@@ -1300,8 +1300,8 @@ public static class SelfTests
             var list = Presets.List();
             Check(list.Count == 1 && list[0].Name == "V125", "the library lists it by name");
             Check(list[0].Sha == ConfigHash.Of(p), "the preset carries the same hash the driver reports for it");
-            Check(list[0].Summary.Contains("yx 1.25") && list[0].Summary.Contains("Y 2.5"),
-                  $"the summary shows the numbers that tell presets apart: {list[0].Summary}");
+            Check(list[0].Summary.Contains("纵向输出整体 ×1.25") && list[0].Summary.Contains("纵向：2.5 起加速"),
+                  $"the summary is plain Chinese, not a hex code: {list[0].Summary}");
 
             var back = Presets.TryLoad(file!);
             Check(back != null && Math.Abs(back.YxRatio - 1.25) < 1e-12 && back.Name == "default",
@@ -1324,6 +1324,15 @@ public static class SelfTests
 
             Check(Presets.Delete("V125", out _) && Presets.List().Count == 0, "delete takes it out of the library");
             Check(!Presets.Delete("V125", out string gone) && gone.Contains("没有"), "deleting twice reports it instead of pretending");
+
+            // a hand-written note wins over the generated one, and delete cleans up both files
+            Check(Presets.Save("压枪 1.25", p, out _, "只把纵向输出乘 1.25，横向不动") != null,
+                "a Chinese preset name survives the file-name sanitizer");
+            var named = Presets.List().FirstOrDefault(x => x.Name == "压枪 1.25");
+            Check(named != null && named.Summary == "只把纵向输出乘 1.25，横向不动" && named.NoteFile.EndsWith(".txt"),
+                $"the sidecar note is what the button shows: '{named?.Summary}'");
+            Check(Presets.Delete("压枪 1.25", out _) && !File.Exists(named!.NoteFile),
+                "deleting a preset also removes its note file");
         }
         finally { Presets.DirOverride = prior; try { Directory.Delete(dir, true); } catch { } }
     }
