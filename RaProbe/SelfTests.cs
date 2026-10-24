@@ -26,45 +26,29 @@ public static class SelfTests
         failures.Clear();
         checks = 0;
 
-        Console.WriteLine("\n== A. SpeedRecorder: window boundaries, trimming, timing ==");
-        Section("recorder", Recorder);
-
-        Console.WriteLine("\n== B. TargetLayout: multi-ball geometry and scoring ==");
+        Console.WriteLine("\n== A. TargetLayout: multi-ball geometry and click attribution ==");
         Section("layout", Layout);
 
-        Console.WriteLine("\n== C. RoundStats: spread instead of a cancelling mean ==");
-        Section("stats", Stats);
+        Console.WriteLine("\n== B. ScoreHistory: the ball-test table the UI shows ==");
+        Section("scoring", Scoring);
 
-
-        Console.WriteLine("\n== D. TestLog: frozen snapshot round trip and comparison ==");
-        Section("log", Logging);
-
-        Console.WriteLine("\n== E. Json.Validate: nothing absurd reaches the driver ==");
+        Console.WriteLine("\n== C. Json.Validate: nothing absurd reaches the driver ==");
         Section("validate", Validate);
 
-        Console.WriteLine("\n== F. Raw input decoding, target attribution, respawn geometry ==");
+        Console.WriteLine("\n== D. Target attribution and respawn geometry ==");
         Section("wire", Wire);
 
-        Console.WriteLine("\n== G. Session rules: clear N balls vs beat the clock ==");
+        Console.WriteLine("\n== E. Session rules: clear N balls vs beat the clock ==");
         Section("rules", Rules);
 
-        Console.WriteLine("\n== H. Open loop: the endpoint of the FIRST movement ==");
-        Section("openloop", OpenLoopChecks);
-
-        Console.WriteLine("\n== I. Simulated flicks: metrics must recover the injected truth ==");
-        Section("simulator", SimulatorChecks);
-
-        Console.WriteLine("\n== J. Device entries through the driver blob and settings.json ==");
+        Console.WriteLine("\n== F. Device entries through the driver blob and settings.json ==");
         Section("devices", DeviceWire);
 
-        Console.WriteLine("\n== K. History groups, noise verdicts, archive round trip ==");
-        Section("history", HistoryChecks);
-
-        Console.WriteLine("\n== L. Poll jitter: is the packet stream regular, and what does it cost in gain ==");
-        Section("jitter", JitterChecks);
-
-        Console.WriteLine("\n== M. Presets: names, hashes, and which slot the driver actually uses ==");
+        Console.WriteLine("\n== G. Presets: names, hashes, and which slot the driver actually uses ==");
         Section("presets", PresetChecks);
+
+        Console.WriteLine("\n== H. CurveAnalysis: where the curve leaves its own baseline ==");
+        Section("curve", CurveChecks);
 
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
@@ -85,96 +69,6 @@ public static class SelfTests
     }
 
     // ---------- A ----------
-
-    static void Recorder()
-    {
-        double clock = 0;
-        var rec = new SpeedRecorder(() => clock) { WindowMs = 2.0, Capacity = 60, IdleGapMs = 80 };
-
-        // the sample emitted right after Mark() must be inside the window, not skipped
-        long mark = rec.Mark();
-        clock += 3; rec.Feed(10, 0);
-        var first = rec.Since(mark);
-        Check(first.Count == 1 && first[0].dx == 10, "Mark() then one window: first sample included (was off by one)");
-
-        // counts must survive a trial boundary: pending partials are flushed, not dropped
-        clock += 1; rec.Feed(4, 0);                       // partial window (<2ms after last emit)
-        long mark2 = rec.Mark();                          // flushing here
-        var before = rec.Since(mark);
-        clock += 3; rec.Feed(7, 0);                       // first sample after the mark belongs to it
-        var after = rec.Since(mark2);
-        int totalCounts = before.Sum(s => Math.Abs(s.dx)) + after.Sum(s => Math.Abs(s.dx));
-        Check(totalCounts == 21 && after.Count == 1 && after[0].dx == 7,
-            $"flush at the boundary keeps every count (fed 10+4+7, saw {totalCounts}; after-window starts clean)");
-
-        // a back-and-forth wiggle inside one window must not look like "no movement"
-        rec.Clear();
-        clock += 200;                                      // idle: new window
-        long m3 = rec.Mark();
-        clock += 2; rec.Feed(5, 0); clock += 0.5; rec.Feed(-5, 0);
-        var wig = rec.Since(m3);
-        Check(wig.Sum(s => s.pathX) == 10, "net displacement 0 but path length 10 is still recorded");
-
-        // bursts: 200 packets delivered as 10 groups of 20 inside one tick must not divide by ~0
-        rec.Clear();
-        clock = 1000;
-        long m4 = rec.Mark();
-        for (int burst = 0; burst < 10; burst++)
-        {
-            for (int i = 0; i < 20; i++) rec.Feed(2, 1);   // same instant: coalesced delivery
-            clock += 10;                                   // ...then the next group arrives
-        }
-        rec.Flush();
-        var burstWin = rec.Since(m4);
-        double peak = burstWin.Count == 0 ? double.MaxValue : burstWin.Max(s => s.SpeedWhole);
-        Check(burstWin.Count > 0 && burstWin.All(s => s.dtMs >= 2.0 - 1e-9),
-            $"every emitted window is at least WindowMs long ({burstWin.Count} windows)");
-        Check(peak < 30 && double.IsFinite(peak), $"peak {peak:0.0} c/ms is plausible, not a dt~0 blowup");
-        double pathX = burstWin.Sum(s => s.pathX), pathY = burstWin.Sum(s => s.pathY);
-        Check(pathX == 400 && pathY == 200,
-            $"all 200 packets' path is accounted for ({pathX:0} x-counts, {pathY:0} y-counts)");
-
-        // trimming: an old mark must be reported as truncated, never silently shortened
-        rec.Clear();
-        rec.Capacity = 10;
-        clock += 500;
-        long old = rec.Mark();
-        for (int i = 0; i < 60; i++) { clock += 3; rec.Feed(1, 0); }
-        var win = rec.Since(old);
-        Check(rec.IsTruncated(old) && win.Count is > 0 and <= 10,
-            $"ring overflow is detected (truncated={rec.IsTruncated(old)}, kept {win.Count}/60)");
-
-        // the curve page polls a counter to decide "did anything arrive since the last repaint".
-        // Count is pinned at Capacity from here on, so it cannot be that counter - the live speed
-        // overlay froze after ~2 minutes of movement exactly because it was.
-        long pinnedWindows = rec.Windows;
-        for (int i = 0; i < 30; i++) { clock += 3; rec.Feed(1, 0); }
-        Check(rec.Count == 10 && rec.Windows >= pinnedWindows + 30,
-            $"a full ring buffer still reports arrivals: Count stuck at {rec.Count}, Windows +{rec.Windows - pinnedWindows}");
-
-        // Clear() must not make an old mark suddenly mean "everything"
-        rec.Clear();
-        Check(rec.IsTruncated(old), "after Clear() an old mark still reads as truncated");
-
-        // idle gap: a 5s pause must not turn one small movement into a tiny speed over a huge dt
-        rec.Clear();
-        clock = 10_000;
-        long m5 = rec.Mark();
-        clock = 10_000 + 5_000; rec.Feed(3, 0);
-        clock += 2; rec.Feed(0, 0);
-        var idle = rec.Since(m5);
-        Check(idle.Any(s => s.dtMs <= 2.5), "a long idle starts a fresh window instead of stretching dt to 5s");
-
-        // percentiles are time weighted and ordered
-        rec.Clear();
-        clock = 0;
-        for (int i = 0; i < 20; i++) { clock += 10; rec.Feed(i, 0); }
-        var pr = rec.Percentiles(byComponent: true);
-        Check(pr.p25 <= pr.p50 && pr.p50 <= pr.p75 && pr.p75 <= pr.p95 && pr.p95 <= pr.peak,
-            $"percentiles ordered (p50 {pr.p50:0.00} p95 {pr.p95:0.00} peak {pr.peak:0.00})");
-    }
-
-    // ---------- B ----------
 
     static void Layout()
     {
@@ -211,85 +105,12 @@ public static class SelfTests
         var none = TargetLayout.Place(1720, 720, 300, 300, 420, 26, 3, seed: 7);
         Check(none.Count == 0, "no room at all returns zero balls instead of placing them off screen");
 
-        // scoring: radial is signed along the aim direction, tangential perpendicular to it
-        var (over, tOver, eOver, pctOver) = TargetLayout.Score(1100, 500, 1000, 500, 1080, 500);
-        Check(over == 20 && tOver == 0 && eOver == 20 && Math.Abs(pctOver - 25) < 1e-9,
-            $"aiming right and stopping beyond the ball = +{over:0}px / +{pctOver:0}% overshoot");
-        var (under, t2, e2, pct2) = TargetLayout.Score(1040, 540, 1000, 500, 1080, 500);
-        Check(under == -40 && t2 == 40 && pct2 == -50,
-            $"stopping short and sideways = {under:0}px radial, {t2:0}px tangential, {pct2:0}% (not ±5%)");
-        var (_, _, e3, _) = TargetLayout.Score(1080, 500, 1000, 500, 1080, 500);
-        Check(e3 == 0, "an exact hit scores zero error");
+        // the score row's only geometry claim: how far the click sat from the ball centre
+        Check(TargetLayout.Error(1100, 500, 1080, 500) == 20, "20px past the centre is a 20px error");
+        Check(Math.Abs(TargetLayout.Error(1040, 540, 1080, 500) - 56.5685) < 1e-3,
+            $"a sideways miss is the real gap, not one axis component ({TargetLayout.Error(1040, 540, 1080, 500):0.0}px)");
+        Check(TargetLayout.Error(1080, 500, 1080, 500) == 0, "an exact hit scores zero error");
     }
-
-    // ---------- C ----------
-
-    static void Stats()
-    {
-        // 50% overshoot and 50% undershoot: the signed mean says "nothing wrong"
-        var t = new List<Trial>();
-        for (int i = 0; i < 10; i++) t.Add(T(20));
-        for (int i = 0; i < 10; i++) t.Add(T(-20));
-        var s = RoundStats.Compute(t, radiusPx: 26, targetDistancePx: 420);
-        Check(Math.Abs(s.RadialMean) < 0.001, $"signed mean cancels to {s.RadialMean:0.###}");
-        Check(s.RadialMae == 20 && Math.Abs(s.RadialSd - 20.54) < 0.1, $"MAE {s.RadialMae:0.0}% sd {s.RadialSd:0.0}% still show the spread");
-        Check(s.OvershootCount == 10 && s.UndershootCount == 10,
-            $"over/under split counts both groups ({s.OvershootCount:0}/{s.UndershootCount:0})");
-        Check(s.Quality.Any(q => q.Contains("NOT evidence of a bias")),
-            "the log warns that the cancelling mean is not a bias");
-
-        var few = RoundStats.Compute(new List<Trial> { T(3), T(-2) }, 26, 420);
-        Check(few.Count == 2 && few.Quality.Any(q => q.Contains("only 2 clicks")), "small samples are flagged, not hidden");
-
-        var noSpeed = RoundStats.Compute(new List<Trial> { new Trial { RadialPct = 1, DistancePx = 420, SampleCount = 0 } }, 26, 420);
-        Check(noSpeed.Quality.Any(q => q.Contains("no packets")), "peak 0 is reported as missing telemetry, not a still hand");
-
-        var seq = new List<Trial>
-        {
-            new() { DistancePx = 300, TargetId = 4, Hit = false, RadialPct = -20, TangentialPx = 5, ErrorPx = 60, StartMs = 0, EndMs = 250, SampleCount = 5,
-                    HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = -20, PrimaryScaleK = 3 },
-            // the retry: short, same target, right after a miss. Its open-loop numbers are wildly
-            // different (it starts next to the ball), which is exactly why it must not be pooled.
-            new() { DistancePx = 40, TargetId = 4, Hit = true, RadialPct = 5, TangentialPx = 1, ErrorPx = 3, StartMs = 250, EndMs = 350, SampleCount = 5,
-                    HasPrimary = true, MaxExtentPct = 140, PrimaryRadialPct = 5, PrimaryScaleK = 100 },
-            new() { DistancePx = 60, TargetId = 9, Hit = true, RadialPct = -3, TangentialPx = 2, ErrorPx = 4, StartMs = 350, EndMs = 500, SampleCount = 5,
-                    HasPrimary = true, MaxExtentPct = 90, PrimaryRadialPct = -3, PrimaryScaleK = 1 },
-        };
-        var rs = RoundStats.Compute(seq, 26, 420);
-        Check(rs.RetryCount == 1, $"an immediate re-click on the ball just missed is flagged as a retry ({rs.RetryCount})");
-        Check(rs.Buckets.All(b => b.label != "<100px" || b.n == 1),
-            $"the retry is kept out of the small-flick bucket ({string.Join(",", rs.Buckets.Select(b => b.label + ":" + b.n))})");
-        Check(rs.Quality.Any(q => q.Contains("retries")), "the log says the buckets exclude retries");
-        Check(rs.PrimaryCount == 2 && rs.PrimaryRetryDropped == 1,
-            $"the open-loop set drops retries too: n={rs.PrimaryCount}, dropped={rs.PrimaryRetryDropped}");
-        Check(Math.Abs(rs.MaxExtentMedian - 80) < 0.01,
-            $"max-extent median comes from the two real flicks, not the retry (70/90 -> {rs.MaxExtentMedian:0}); " +
-            "a pooled retry would have pulled it to 90");
-        Check(Math.Abs(rs.ScaleKMedian - 2) < 0.01,
-            $"the reconstruction stretch is reported and retry-free (3/1 -> {rs.ScaleKMedian:0.0}); a pooled retry would read 100");
-
-        var same = RoundStats.Compute(t, 26, 420);
-        Check(same.Quality.Any(q => q.Contains("one distance bucket")),
-            $"a single-distance round cannot separate small from large flicks ({same.Buckets.Count} bucket)");
-
-        var mixed = new List<Trial>();
-        for (int i = 0; i < 8; i++) mixed.Add(T(6, 60));
-        for (int i = 0; i < 8; i++) mixed.Add(T(-6, 300));
-        for (int i = 0; i < 8; i++) mixed.Add(T(20, 700));
-        var ms = RoundStats.Compute(mixed, 26, 420);
-        Check(ms.Buckets.Count == 3 && ms.Buckets[0].label == "<100px" && ms.Buckets[2].label == ">=500px",
-            $"flicks get split by length ({string.Join(",", ms.Buckets.Select(b => b.label + ":" + b.n))})");
-        Check(Math.Abs(ms.Buckets[0].radialMedian - 6) < 1e-9 && Math.Abs(ms.Buckets[2].radialMedian - 20) < 1e-9,
-            "each bucket keeps its own radial median, so a small-flick bias cannot hide in the overall mean");
-    }
-
-    static Trial T(double radialPct, double distancePx = 420) => new()
-    {
-        RadialPct = radialPct, RadialPx = radialPct * distancePx / 100.0, TangentialPx = 3,
-        ErrorPx = Math.Abs(radialPct * distancePx / 100.0),
-        DistancePx = distancePx, Hit = Math.Abs(radialPct) < 7, StartMs = 0, EndMs = 300,
-        SampleCount = 5, TargetId = 1, VisibleTargets = 3,
-    };
 
     // ---------- shared helpers for the JSON / validation sections ----------
 
@@ -310,7 +131,7 @@ public static class SelfTests
         return r;
     }
 
-    // ---------- E ----------
+    // ---------- C ----------
 
     static void Validate()
     {
@@ -358,45 +179,10 @@ public static class SelfTests
         Check(Json.Validate(time).Any(p => p.Contains("反了")), "inverted time clamp is caught");
     }
 
-    // ---------- F ----------
-
-    static byte[] RawInputMouse(ushort usFlags, int dx, int dy, long device)
-    {
-        var b = new byte[48];
-        BitConverter.GetBytes(0u).CopyTo(b, 0);            // dwType = RID_TYPEMOUSE
-        BitConverter.GetBytes(1u).CopyTo(b, 4);            // dwCommand
-        BitConverter.GetBytes(device).CopyTo(b, 8);        // hDevice
-        BitConverter.GetBytes(0L).CopyTo(b, 16);           // hWnd
-        BitConverter.GetBytes(usFlags).CopyTo(b, 24);      // RAWMOUSE.usFlags
-        BitConverter.GetBytes(0u).CopyTo(b, 28);           // ulButtons
-        BitConverter.GetBytes(0u).CopyTo(b, 32);           // ulRawButtons
-        BitConverter.GetBytes(dx).CopyTo(b, 36);           // lLastX
-        BitConverter.GetBytes(dy).CopyTo(b, 40);           // lLastY
-        BitConverter.GetBytes(0u).CopyTo(b, 44);           // ulExtraInformation
-        return b;
-    }
+    // ---------- D ----------
 
     static void Wire()
     {
-        // the flags that decide whether a packet is kept: MOUSE_MOVE_RELATIVE is 0, ABSOLUTE is 1.
-        // Reading bit0 as "relative" once silently dropped every packet (a round logged 0/30 speeds).
-        var rel = RawInput.Decode(RawInputMouse(0x0000, 7, -3, 0x1234));
-        Check(rel.relative && !rel.absolute && rel.dx == 7 && rel.dy == -3,
-            $"a normal relative packet is decoded (dx {rel.dx}, dy {rel.dy})");
-        Check(rel.device == new IntPtr(0x1234), "the originating device handle is read");
-
-        var abs = RawInput.Decode(RawInputMouse(0x0001, 99, 99, 0x1));
-        Check(!abs.relative && abs.absolute && abs.dx == 0, "an absolute pointer is not treated as movement");
-
-        var virt = RawInput.Decode(RawInputMouse(0x0002, 4, 4, 0x1));
-        Check(virt.relative && virt.virtualDesktop && virt.dx == 4, "virtual-desktop relative motion is still kept");
-
-        var kb = RawInputMouse(0, 1, 1, 0x1);
-        BitConverter.GetBytes(1u).CopyTo(kb, 0);           // dwType = keyboard
-        var notMouse = RawInput.Decode(kb);
-        Check(notMouse.bytes == 0 && notMouse.dx == 0, "a non-mouse packet decodes to nothing");
-        Check(RawInput.Decode(new byte[10]).bytes == 0, "a short buffer is refused instead of read out of bounds");
-
         // target attribution: the ball under the cursor wins, otherwise the nearest one is flagged
         var list = new List<BallTarget> { new(1, 100, 100, 0, 0), new(2, 800, 400, 0, 0), new(3, 900, 900, 0, 0) };
         Check(TargetLayout.Pick(list, 26, 110, 95) == (0, true), "a click inside a ball is attributed to that ball");
@@ -420,7 +206,7 @@ public static class SelfTests
             "a respawn still keeps the configured distance from the click point");
     }
 
-    // ---------- J ----------
+    // ---------- F ----------
 
     static void DeviceWire()
     {
@@ -469,339 +255,7 @@ public static class SelfTests
             $"and the wire really does cut it at {device_settings.MAX_DEV_ID_LEN - 1} chars (got {cut.Id.Length})");
     }
 
-    // ---------- I ----------
-
-    static void SimulatorChecks()
-    {
-        const double dist = 700;
-
-        // 1) a clean flick that lands on the first movement
-        var a = Simulator.Flick1(dist, 6.0, 1.00, seed: 11, emptyWindowRate: 0.18);
-        var pa = OpenLoop.Analyze(a.Path, 0, 0, dist, 0, dist, 0, 26);
-        Check(pa != null, "clean flick reconstructed");
-        if (pa == null) return;
-        double truthA = a.TrueMaxExtentPx / dist * 100.0;
-        Check(Math.Abs(pa.Value.MaxExtentPct - truthA) < 3 && !pa.Value.Overshot,
-            $"clean flick: max_extent {pa.Value.MaxExtentPct:0.0}% against injected {truthA:0.0}%, overshot={pa.Value.Overshot}");
-        Check(!pa.Value.Corrected, $"clean flick needs no second submovement (corrected={pa.Value.Corrected})");
-        Check(Math.Abs(pa.Value.RadialPct) < 3,
-            $"and the first impulse is measured on the target ({pa.Value.RadialPct:0.0}%, truth 0)");
-        Check(!double.IsNaN(pa.Value.TimeToTargetMs) && Math.Abs(pa.Value.TimeToTargetMs - a.TrueReachMs) < 6,
-            $"entry time {pa.Value.TimeToTargetMs:0}ms against injected {a.TrueReachMs:0}ms");
-        Check(a.Path.Count(s => s.dx == 0) > 3, $"the injected series really does contain coalesced windows ({a.Path.Count(s => s.dx == 0)} of {a.Path.Count})");
-
-        // 2) a flick that flies 15% past the target and is pulled back
-        var b = Simulator.Flick1(dist, 6.0, 1.15, seed: 22, emptyWindowRate: 0.18);
-        var pb = OpenLoop.Analyze(b.Path, 0, 0, dist, 0, dist, 0, 26);
-        double truthB = b.TrueMaxExtentPx / dist * 100.0;
-        Check(pb != null && Math.Abs(pb.Value.MaxExtentPct - truthB) < 3 && pb.Value.Overshot,
-            $"overshooting flick: max_extent {pb?.MaxExtentPct:0.0}% against injected {truthB:0.0}%, overshot={pb?.Overshot}");
-        Check(pb != null && pb.Value.Corrected, "and it is counted as corrected (it had to come back)");
-        double primB = (b.TruePrimaryExtentPx - dist) / dist * 100.0;
-        Check(pb != null && pb.Value.RadialPct > primB - 4 && pb.Value.RadialPct <= primB + 1,
-            $"the impulse is measured flying past ({pb?.RadialPct:0.0}% against injected {primB:0.0}%)");
-
-        // 3) a flick that stops at 76% and creeps in - the case the old code truncated wrongly
-        var c = Simulator.Flick1(dist, 6.0, 0.76, seed: 33, emptyWindowRate: 0.18);
-        var pc = OpenLoop.Analyze(c.Path, 0, 0, dist, 0, dist, 0, 26);
-        double truthC = c.TrueMaxExtentPx / dist * 100.0;
-        Check(pc != null && Math.Abs(pc.Value.MaxExtentPct - truthC) < 3,
-            $"short-then-creep flick: max_extent {pc?.MaxExtentPct:0.0}% against injected {truthC:0.0}%");
-        Check(pc != null && pc.Value.Corrected, "the creep is counted as a second submovement");
-        double primC = (c.TruePrimaryExtentPx - dist) / dist * 100.0;
-        Check(pc != null && Math.Abs(pc.Value.RadialPct - primC) < 4,
-            $"and the segmentation view still reports the first impulse short ({pc?.RadialPct:0.0}% against injected {primC:0.0}%)");
-
-        // 4) a whole simulated round through the real statistics + guard
-        var round = Simulator.Round(40, dist, 6.0, 1.0, seed: 77);
-        var st = RoundStats.Compute(round, 26, dist);
-        Check(st.PrimaryCount == round.Count, $"every simulated flick was reconstructed ({st.PrimaryCount}/{round.Count})");
-        Check(st.HitExtentMedian >= 95 && !st.Quality.Any(q => q.Contains("losing pointer travel")),
-            $"the travel guard stays quiet on clean data (hits reached {st.HitExtentMedian:0}%)");
-        Check(st.MaxExtentMedian > 96 && st.MaxExtentMedian < 106,
-            $"round-level max_extent median {st.MaxExtentMedian:0.0}%");
-        Check(st.TimeToTargetMedian > 20 && st.TimeToTargetMedian < 1200,
-            $"round-level entry time median {st.TimeToTargetMedian:0}ms");
-        Check(st.Count == 40 && st.BallsCleared >= 30, $"simulated round scored {st.BallsCleared}/{st.Count} clicks");
-
-        // 4b) and the round must really aim in many directions, because the whole point of the
-        //     simulator is to catch curve effects that only appear off-axis. Until the generated
-        //     path was rotated into the aim direction, diagonal trials reported extents like 0% and
-        //     114% - the generator's own skew, not the driver's.
-        int diagonal = round.Count(x => Math.Abs(Math.Sin(x.AngleRad)) > 0.35 && Math.Abs(Math.Cos(x.AngleRad)) > 0.35);
-        Check(diagonal >= 15, $"the simulated round really spreads its aim directions ({diagonal}/{round.Count} diagonal)");
-        var diagExtent = round.Where(x => Math.Abs(Math.Sin(x.AngleRad)) > 0.35 && Math.Abs(Math.Cos(x.AngleRad)) > 0.35
-                                          && x.HasPrimary).Select(x => x.MaxExtentPct).ToList();
-        Check(diagExtent.Count > 8 && diagExtent.Average() is > 96 and < 106,
-            $"diagonal flicks recover the injected extent as well as straight ones ({diagExtent.Average():0.0}% over n={diagExtent.Count})");
-
-        // 5) the metric that the whole tuning protocol rests on must be blind to nothing:
-        //    a systematically-overshooting round has to show it, a clean one must not
-        var hot = Simulator.Round(40, dist, 6.0, 1.12, seed: 91);
-        var sh = RoundStats.Compute(hot, 26, dist);
-        Check(sh.MaxExtentMedian > st.MaxExtentMedian + 5,
-            $"a round that flies past reads {sh.MaxExtentMedian:0.0}% vs {st.MaxExtentMedian:0.0}% for a neutral one");
-        Check(sh.OvershootCount2 > st.OvershootCount2,
-            $"and the overshoot count separates them ({sh.OvershootCount2} vs {st.OvershootCount2})");
-        Check(Math.Abs(sh.RadialMedian - st.RadialMedian) < 1,
-            "closed-loop accuracy is blind to it: both rounds click on the ball because he corrects, " +
-            $"radial median {st.RadialMedian:0.0}% vs {sh.RadialMedian:0.0}%");
-    }
-
-    // ---------- H ----------
-
-    static void OpenLoopChecks()
-    {
-        // a flick that flies past the target and is then pulled back before the click:
-        // the closed-loop error says "fine", only the initial impulse reveals the overshoot
-        int[] dx = { 100, 180, 220, 160, 90, 40, 20, -30, -40 };
-        var path = new List<MouseSample>();
-        double t = 1000;
-        foreach (var d in dx) { path.Add(new MouseSample(d, 0, 2.0, t, path.Count + 1)); t += 2; }
-
-        var p = OpenLoop.Analyze(path, 0, 0, 700, 0, 740, 0);
-        Check(p != null, "a path with enough windows is reconstructed");
-        if (p == null) return;
-        Check(p.Value.RadialPx > 60 && p.Value.RadialPct > 8,
-            $"the primary impulse is caught past the target ({p.Value.RadialPx:0}px, {p.Value.RadialPct:0.0}%)");
-        Check(p.Value.Corrected, "the pull-back before clicking is flagged as a correction");
-        Check(!p.Value.Scaled, "no rescale when the reconstructed path already matches the click displacement");
-        Check(p.Value.TimeMs > 0 && p.Value.PeakCms > 50, $"impulse time {p.Value.TimeMs:0}ms, peak {p.Value.PeakCms:0} c/ms");
-
-        // the failure that made the first five baseline rounds useless: one smooth movement with
-        // sparse/coalesced windows inside it must not be truncated at the first dip
-        int[] spiky = { 60, 140, 200, 0, 200, 50, 30, 20, 0, 10, -10 };
-        var sp2 = new List<MouseSample>();
-        double t2 = 1000;
-        foreach (var d in spiky) { t2 += 2; sp2.Add(new MouseSample(d, 0, 2.0, t2, sp2.Count + 1)); }
-        var q = OpenLoop.Analyze(sp2, 0, 0, 700, 0, 700, 0);
-        Check(q != null && Math.Abs(q.Value.RadialPct) < 6,
-            $"a monotone ramp with two empty windows is not truncated ({q?.RadialPct:0.0}%)");
-        Check(q != null && !q.Value.Corrected, "and that ramp is not counted as corrected");
-        Check(q != null && q.Value.MaxExtentPct > 98 && q.Value.MaxExtentPct < 103 && !q.Value.Overshot,
-            $"a clean flick that never passes the ball reads max_extent {q?.MaxExtentPct:0}% / overshot={q?.Overshot}");
-        Check(q != null && !double.IsNaN(q.Value.TimeToTargetMs),
-            $"the moment it first entered the ball is measurable ({q?.TimeToTargetMs:0}ms)");
-
-        // the clock-base regression: in the app the samples carry the raw-input monitor's
-        // process-wide stopwatch while the flick window belongs to the test window's own
-        // stopwatch, so the two differ by the app uptime. The first real rounds after the
-        // rescale fix logged "time to target = 421141ms" (2026-10-21 17:55) - 7 minutes of
-        // uptime leaking into a 0.4s flick. Simulated flicks start at t=0, so only an
-        // explicitly offset path can catch this class of bug.
-        var shifted = new List<MouseSample>();
-        foreach (var s in sp2)
-            shifted.Add(new MouseSample(s.dx, s.dy, s.dtMs, s.timeMs + 420_000, shifted.Count + 1));
-        var qShift = OpenLoop.Analyze(shifted, 0, 0, 700, 0, 700, 0);
-        Check(qShift != null && Math.Abs(qShift.Value.TimeToTargetMs - q!.Value.TimeToTargetMs) < 1e-6
-              && Math.Abs(qShift.Value.OnsetMs - q.Value.OnsetMs) < 1e-6
-              && Math.Abs(qShift.Value.TimeMs - q.Value.TimeMs) < 1e-6,
-            "durations do not move when the sample clock starts 7 minutes into the process");
-        Check(qShift != null && qShift.Value.TimeToTargetMs < 1_000 && qShift.Value.OnsetMs < 1_000,
-            $"every open-loop duration is a flick-sized number, not an uptime ({qShift?.TimeToTargetMs:0}ms / {qShift?.OnsetMs:0}ms)");
-
-        // and if such a value ever reaches the statistics anyway, it must not survive into the log
-        var uptime = new List<Trial>();
-        for (int i = 0; i < 10; i++)
-            uptime.Add(new Trial
-            {
-                DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 101, PrimaryRadialPct = 0,
-                SampleCount = 9, StartMs = 420_000 + i * 500, EndMs = 420_400 + i * 500,
-                TimeToTargetMs = 421_141, OnsetMs = 420_500,
-            });
-        var upSt = RoundStats.Compute(uptime, 26, 700);
-        Check(double.IsNaN(upSt.TimeToTargetMedian) && double.IsNaN(upSt.OnsetMedianMs),
-            "a duration longer than the round itself is dropped, not logged as a measurement");
-
-        // ---------- path shape: the arc an endpoint number cannot see ----------
-        // A pointer that swings out and comes back lands exactly where a straight one lands, so
-        // the tangential ENDPOINT error (~20px) under-reports what the user actually sees: he
-        // reports drawing arcs and circles. Build a path with a KNOWN injected bend and check
-        // that the estimator recovers its sign and its size.
-        List<MouseSample> BendPath(double ax, double ay, double dist, double e, bool taper,
-                                   out double endX, out double endY)
-        {
-            const int n = 40;
-            var list = new List<MouseSample>();
-            double carryX = 0, carryY = 0, prevX = 0, prevY = 0;
-            endX = endY = 0;
-            for (int i = 0; i < n; i++)
-            {
-                double along = dist * i / (n - 1);
-                double perp = e * along * ax * ay * (taper ? Math.Sin(System.Math.PI * i / (n - 1)) : 1.0);
-                double x = along * ax - perp * ay, y = along * ay + perp * ax;
-                carryX += x - prevX; carryY += y - prevY;
-                int dx = (int)System.Math.Round(carryX), dy = (int)System.Math.Round(carryY);
-                carryX -= dx; carryY -= dy;
-                prevX = x; prevY = y;
-                list.Add(new MouseSample(dx, dy, 2.0, i * 2.0, i + 1));
-                if (i == n - 1) { endX = x; endY = y; }
-            }
-            return list;
-        }
-        const double d45 = 0.7071067811865476;
-
-        var straightP = BendPath(d45, d45, 700, 0, false, out double sx, out double sy);
-        var ps = OpenLoop.Analyze(straightP, 0, 0, 700 * d45, 700 * d45, sx, sy);
-        Check(ps != null && ps.Value.ArcRatio < 0.02 && ps.Value.Reversals == 0
-              && Math.Abs(ps.Value.AsymCoef) < 0.02,
-            $"a straight flick reads as straight: arc {ps?.ArcRatio:0.00}, turns {ps?.Reversals}, e {ps?.AsymCoef:0.000}");
-
-        var bentP = BendPath(d45, d45, 700, 0.10, false, out double bx, out double by);
-        var pb = OpenLoop.Analyze(bentP, 0, 0, 700 * d45, 700 * d45, bx, by);
-        Check(pb != null && pb.Value.AsymCoef > 0.07 && pb.Value.AsymCoef < 0.13,
-            $"an injected +10% Y surplus is recovered as e = {pb?.AsymCoef:0.000} (sign and size)");
-        Check(pb != null && pb.Value.ArcRatio > 0.05 && pb.Value.PerpPeakPx > 15,
-            $"and the arc itself shows up as curvature: ratio {pb?.ArcRatio:0.00}, {pb?.PerpPeakPx:0}px off the line");
-
-        var bentNegP = BendPath(d45, d45, 700, -0.10, false, out double nx, out double ny);
-        var pn = OpenLoop.Analyze(bentNegP, 0, 0, 700 * d45, 700 * d45, nx, ny);
-        Check(pn != null && pn.Value.AsymCoef < -0.07,
-            $"the mirror image (X surplus) flips the sign: e = {pn?.AsymCoef:0.000}");
-
-        var mirroredP = BendPath(d45, -d45, 700, 0.10, false, out double mx, out double my);
-        var pmir = OpenLoop.Analyze(mirroredP, 0, 0, 700 * d45, -700 * d45, mx, my);
-        Check(pmir != null && pmir.Value.AsymCoef > 0.07,
-            $"aiming the other diagonal (down-right) keeps the same +e for the same axis surplus ({pmir?.AsymCoef:0.000})");
-
-        var hookedP = BendPath(d45, d45, 700, 0.10, true, out double hx, out double hy);
-        var phk = OpenLoop.Analyze(hookedP, 0, 0, 700 * d45, 700 * d45, hx, hy);
-        Check(phk != null && phk.Value.Reversals >= 1 && phk.Value.AsymCoef > 0.04,
-            $"a bulge that comes back to the line is still caught: {phk?.Reversals} direction change(s), e {phk?.AsymCoef:0.000}");
-
-        // ...and the swing detector must not turn delivery jitter into "he drew an arc":
-        // +-2px of perpendicular noise on a straight 700px flick is far below one leg
-        var jitter = new List<MouseSample>();
-        var rnd = new System.Random(7);
-        double jx = 0, jy = 0, pjx = 0, pjy = 0;
-        for (int i = 0; i < 80; i++)
-        {
-            double along = 700.0 * i / 79;
-            double jit = (rnd.NextDouble() - 0.5) * 4.0;
-            double x = along * d45 - jit * d45, y = along * d45 + jit * d45;
-            int dxi = (int)System.Math.Round(x - pjx), dyi = (int)System.Math.Round(y - pjy);
-            pjx += dxi; pjy += dyi;
-            jitter.Add(new MouseSample(dxi, dyi, 2.0, i * 2.0, i + 1));
-            jx = pjx; jy = pjy;
-        }
-        var pj = OpenLoop.Analyze(jitter, 0, 0, 700 * d45, 700 * d45, jx, jy);
-        Check(pj != null && pj.Value.Reversals <= 1,
-            $"+-2px of jitter on a straight flick is not counted as an arc ({pj?.Reversals} swing(s))");
-        Check(pj != null && Math.Abs(pj.Value.AsymCoef) < 0.03,
-            $"and jitter carries no axis direction either: e = {pj?.AsymCoef:0.000}");
-
-        // the round-level view: diagonal-only weighting, and noise must not fake a direction
-        List<Trial> ShapeBatch(double e, int n)
-        {
-            var l = new List<Trial>();
-            for (int i = 0; i < n; i++)
-            {
-                double ang = System.Math.PI / 4 + (i % 7) * 0.05;      // all diagonal
-                double c = Math.Cos(ang), s = Math.Sin(ang);
-                var pth = BendPath(c, s, 700, e, false, out double ex, out double ey);
-                var pr = OpenLoop.Analyze(pth, 0, 0, 700 * c, 700 * s, ex, ey);
-                l.Add(new Trial
-                {
-                    DistancePx = 700, AngleRad = ang, Hit = true, HasPrimary = true, SampleCount = 40,
-                    MaxExtentPct = 101, PrimaryRadialPct = 0,
-                    ArcRatio = pr?.ArcRatio ?? 0, LateralPathPx = pr?.LateralPathPx ?? 0,
-                    PerpPeakPx = pr?.PerpPeakPx ?? 0, PathReversals = pr?.Reversals ?? 0,
-                    AsymCoef = pr?.AsymCoef ?? double.NaN, AsymNum = pr?.AsymNum ?? 0, AsymDen = pr?.AsymDen ?? 0,
-                });
-            }
-            return l;
-        }
-        var stE0 = RoundStats.Compute(ShapeBatch(0, 40), 26, 700);
-        var stE1 = RoundStats.Compute(ShapeBatch(0.10, 40), 26, 700);
-        Check(stE0.AsymN >= 30 && Math.Abs(stE0.AsymMean) < 0.02,
-            $"40 straight diagonal flicks give no asymmetry: e = {stE0.AsymMean:0.000} +- {stE0.AsymSem:0.000} (n={stE0.AsymN})");
-        Check(stE1.AsymMean > 0.07 && stE1.AsymMean - 2 * stE1.AsymSem > 0,
-            $"40 flicks with a 10% Y surplus are detected beyond their own scatter: e = {stE1.AsymMean:0.000} +- {stE1.AsymSem:0.000}");
-
-        // The error bar itself has to be trustworthy, otherwise "no asymmetry found" is just a
-        // sentence. Feed flicks whose individual slopes scatter around a known truth and check the
-        // pooled fit recovers it and that the bar shrinks like 1/sqrt(n).
-        static List<Trial> AsymTrials(int n, double spread)
-        {
-            var l = new List<Trial>();
-            for (int i = 0; i < n; i++)
-            {
-                double coef = 0.10 + (i % 2 == 0 ? spread : -spread);
-                l.Add(new Trial
-                {
-                    DistancePx = 700, AngleRad = System.Math.PI / 4, Hit = true, HasPrimary = true,
-                    SampleCount = 9, MaxExtentPct = 101, PrimaryRadialPct = 0,
-                    AsymCoef = coef, AsymNum = coef * 1000, AsymDen = 1000,
-                });
-            }
-            return l;
-        }
-        var bar40 = RoundStats.Compute(AsymTrials(40, 0.02), 26, 700);
-        var bar160 = RoundStats.Compute(AsymTrials(160, 0.02), 26, 700);
-        Check(Math.Abs(bar40.AsymMean - 0.10) < 1e-9 && bar40.AsymN == 40,
-            $"the pooled fit recovers the true slope, not the average of ratios ({bar40.AsymMean:0.000})");
-        Check(bar160.AsymSem > 0 && bar160.AsymSem < bar40.AsymSem * 0.75,
-            $"the error bar shrinks with sample size: n=40 ±{bar40.AsymSem:0.0000} -> n=160 ±{bar160.AsymSem:0.0000}");
-        Check(bar40.AsymMean > 3 * bar40.AsymSem,
-            $"a real 10% surplus clears its own bar by {bar40.AsymMean / bar40.AsymSem:0.0}x - so a null result means something");
-
-        Check(p.Value.MaxExtentPct > 110 && p.Value.Overshot,
-            $"a flick that flies past reads max_extent {p.Value.MaxExtentPct:0}% / overshot={p.Value.Overshot}");
-
-        var rs = RoundStats.Compute(new List<Trial>
-        {
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -30, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -28, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -31, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -29, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -30, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -33, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -27, Corrected = false, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, PrimaryRadialPct = -35, Corrected = false, SampleCount = 9 },
-        }, 26, 700);
-        Check(rs.NoFixCount == 8 && Math.Abs(rs.NoFixPrimMedian + 30) < 3,
-            "the no-correction impulse number is reported");
-
-        List<Trial> Short(int n, double extent) => Enumerable.Range(0, n)
-            .Select(_ => new Trial { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = extent, PrimaryRadialPct = 0, SampleCount = 9 })
-            .ToList();
-        Check(RoundStats.Compute(Short(10, 70), 26, 700).Quality.Any(q => q.Contains("losing pointer travel")),
-            "a hit whose reconstructed path only reached 70% is flagged: the reconstruction lost travel");
-        Check(!RoundStats.Compute(Short(10, 101), 26, 700).Quality.Any(q => q.Contains("losing pointer travel")),
-            "and the same check stays quiet when hits really reached the ball");
-
-        Check(OpenLoop.Analyze(path[..2], 0, 0, 700, 0, 740, 0) == null,
-            "two windows are not enough to claim an initial impulse");
-        Check(OpenLoop.Analyze(path, 0, 0, 0, 0, 1, 1) == null, "a zero-length aim is refused");
-
-        // counts disagree with the pointer's real travel (scaling/DPI): the shape is kept, rescaled
-        var p2 = OpenLoop.Analyze(path, 0, 0, 700, 0, 1480, 0);
-        Check(p2 != null && p2.Value.Scaled && p2.Value.RadialPx > 0,
-            $"path rescaled to the real displacement ({p2?.RadialPx:0.0}px past, scaled={p2?.Scaled})");
-
-        // the exact failure of the 2026-10-21 morning rounds: the path is in raw counts while the
-        // click is in screen px, and the true gain (1.176x here) sat inside the old [0.8,1.25]
-        // "small mismatch" band - so the rescale was skipped and every hit read ~86% of its
-        // extent, tripping the travel guard on all 5 real rounds. The click is ground truth.
-        double g = 1.176;
-        var cnt = new List<MouseSample>();
-        double t3 = 1002, acc = 0; int emitted = 0;
-        foreach (double d in spiky)
-        {
-            acc += d / g;                       // the driver emits integer counts: carry the remainder
-            int whole = (int)Math.Round(acc);
-            t3 += 2;
-            cnt.Add(new MouseSample(whole - emitted, 0, 2.0, t3, cnt.Count + 1));
-            emitted = whole;
-        }
-        var r = OpenLoop.Analyze(cnt, 0, 0, 700, 0, 700, 0);
-        Check(r != null && q != null && Math.Abs(r.Value.MaxExtentPct - q.Value.MaxExtentPct) < 0.5,
-            $"a counts-unit flick reads the same shape as the px flick ({r?.MaxExtentPct:0.0}% vs {q?.MaxExtentPct:0.0}%; the old band read ~86%)");
-        Check(r != null && q != null && Math.Abs(r.Value.RadialPct - q.Value.RadialPct) < 0.5,
-            $"and its impulse is not reported short by the unit gap ({r?.RadialPct:0.0}% vs {q?.RadialPct:0.0}%)");
-    }
-
-    // ---------- G ----------
+    // ---------- E ----------
 
     static void Rules()
     {
@@ -826,384 +280,67 @@ public static class SelfTests
         Check(t2.Score().Contains("30 球"), "score line states what the round achieved");
     }
 
-    // ---------- D ----------
+    // ---------- B ----------
 
-    static void Logging()
+    static void Scoring()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "raui-logtest-" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(Path.GetTempPath(), "raui-scoretest-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
-        TestLog.IndexOverride = dir;          // never write test rows into the user's real index.csv
+        var prior = ScoreHistory.DirOverride;
+        ScoreHistory.DirOverride = dir;          // never write test rows into the user's real history
         try
         {
-            // TestLog writes beside the running executable; use a copy in temp for the read-back
-            var doc = BaseDoc();
-            var data = new RoundData
-            {
-                RoundId = "round-test-1",
-                When = "2026-10-20 09:00:00",
-                DriverVersion = "driver v1.7.0",
-                ProfileName = "default",
-                ConfigSha = ConfigHash.Of(doc.Profiles[0]),
-                ConfigSource = "driver (frozen before the round)",
-                ProfileJson = Json.Serialize(doc),
-                Profile = Convert4.ToStruct(doc.Profiles[0]),
-                Sensitivity = 1.5, MouseDpi = 600, PollRate = 2000,
-                TargetDistancePx = 420, RadiusPx = 26, TargetCount = 3, Seed = 1234,
-                Mode = "点掉 12 球", Score = "点掉 3/12 球，用了 12 次点击（9.2s）", SessionMs = 9200,
-                Direction = "全向", Resolution = "3440x1440@180",
-                Trials = new List<Trial> { T(20), T(-20), T(5), T(-8), T(30), T(-30), T(2), T(-2), T(12), T(-15),
-                                            T(18), T(-11) },
-                OutputSpeed = (4, 9, 20, 40),
-                TelemetryNote = "test note",
-            };
+            Check(ScoreHistory.Recent(10).Count == 0, "an empty history reads back as empty, not as an error");
 
-            var file = Path.Combine(dir, data.RoundId + ".log");
-            TestLog.Write(file, data);
-            var text = File.ReadAllText(file);
+            ScoreHistory.Append(Row("2026-10-20 09:00:00", 26, 30, 45_000, "aaaaaaaaaaaa"));
+            ScoreHistory.Append(Row("2026-10-20 09:05:00", 30, 52, 60_000, "bbbbbbbbbbbb"));
+            var rows = ScoreHistory.Recent(10);
+            Check(rows.Count == 2, $"two rounds appended, both read back ({rows.Count})");
+            Check(rows[0].When == "2026-10-20 09:05:00", "the newest round is first, which is what the table shows");
+            Check(Math.Abs(rows[0].HitRate - 57.6923) < 0.01 && Math.Abs(rows[1].HitRate - 86.667) < 0.01,
+                  $"hit rate is cleared/clicks, not cleared/goal ({rows[0].HitRate:0.0}% vs {rows[1].HitRate:0.0}%)");
+            Check(rows[0].SessionMs == 60_000 && rows[0].Balls == 3 && rows[0].RadiusPx == 26,
+                  $"the setup travels with the score (ms {rows[0].SessionMs:0}, balls {rows[0].Balls}, r {rows[0].RadiusPx:0})");
 
-            Check(File.Exists(file), "round file written");
-            Check(text.Contains("format v" + TestLog.FormatVersion), "log carries a format version");
-            Check(text.Contains("config sha " + data.ConfigSha), "log records the frozen config hash");
-            Check(text.Contains("driver (frozen before the round)"), "log states where the config came from");
-            Check(text.Contains("POST-driver"), "log labels speeds as post-driver output");
-            Check(!text.Contains("甩到位了吗") && !text.Contains("压枪"), "log has no subjective questionnaire section");
-            Check(text.Contains("machine readable") && text.Contains("```json"), "log embeds a machine-readable block");
-            Check(text.Contains("quality flags"), "log prints data-quality flags");
+            var file = ScoreHistory.FilePath;
+            var lines = File.ReadAllLines(file);
+            Check(lines[0].StartsWith("时间;"), "the header is Chinese, so the file opens in any editor without this app");
+            Check(lines.Length == 3, $"exactly one line per round plus the header ({lines.Length} lines)");
 
-            var sum = TestLog.ReadSummary(file);
-            Check(sum != null && sum.Trials == 12, "machine block reads back with the click count");
-            Check(sum!.Clicks == 12 && sum.BallsCleared == 3,
-                $"cleared vs clicked survive the round trip ({sum.BallsCleared} cleared / {sum.Clicks} clicks)");
-            Check(sum.Mode.Contains("12 球") && sum.Score.Contains("点掉"), "the mode and score line are stored machine-readably");
-            Check(sum.KillsPerMinute > 0, $"pace is stored ({sum.KillsPerMinute:0.0} balls/min)");
-            Check(text.Contains("cleared 3 balls"), "the human summary separates cleared balls from clicks");
-            Check(text.Contains("点掉 12 球"), "the setup line states the goal mode");
-            Check(text.Contains("result           :"), "the result line states what the round achieved");
-            Check(sum.ConfigSha == data.ConfigSha, "machine block carries the same config hash");
-            Check(Math.Abs(sum.DistancePx - 420) < 1e-6 && sum.TargetCount == 3, "machine block keeps the setup for comparison");
-            Check(sum.Quality.Count > 0, "machine block keeps the quality flags");
+            // a hand-edited or half-written line must cost one row, not the whole table
+            File.AppendAllText(file, "this line is not a record" + Environment.NewLine);
+            Check(ScoreHistory.Recent(10).Count == 2, "a malformed line is skipped instead of dropping the history");
 
-            // JSON inside the fence must be valid on its own
-            int a = text.IndexOf("```json", StringComparison.Ordinal);
-            int b = text.IndexOf("```", a + 7, StringComparison.Ordinal);
-            try { using var _d = JsonDocument.Parse(text[(a + 7)..b].Trim()); Check(true, "embedded json parses"); }
-            catch (Exception e) { Check(false, "embedded json parses: " + e.Message); }
+            // ';' separates fields, so a plan name carrying one must not shift the columns
+            var tricky = Row("2026-10-20 09:10:00", 10, 12, 20_000, "cccccccccccc");
+            tricky.PlanName = "压枪; 试验";
+            tricky.Resolution = "3440x1440@180";
+            ScoreHistory.Append(tricky);
+            var newest = ScoreHistory.Recent(1)[0];
+            Check(newest.PlanName == "压枪, 试验" && newest.Resolution == "3440x1440@180",
+                  $"a separator inside a name is escaped and the columns stay put ({newest.PlanName})");
+            Check(newest.Label().Contains("命中率 83%") && newest.Label().Contains("点掉 30 球")
+                  && !newest.Label().Contains("cccccccccccc"),
+                  $"a round reads as plain text, with no hex code in the line: {newest.Label()}");
 
-            var same = new RoundData
-            {
-                RoundId = "round-test-2", When = data.When, DriverVersion = data.DriverVersion,
-                ProfileName = data.ProfileName, ConfigSha = data.ConfigSha, ConfigSource = data.ConfigSource,
-                ProfileJson = data.ProfileJson, Profile = data.Profile, Sensitivity = 1.5, MouseDpi = 600,
-                PollRate = 2000, TargetDistancePx = 420, RadiusPx = 26, TargetCount = 3, Seed = 1234,
-                Direction = "全向", Resolution = "3440x1440@180", Trials = new List<Trial>(data.Trials),
-                OutputSpeed = data.OutputSpeed, TelemetryNote = "",
-            };
-            var f2 = Path.Combine(dir, "round-test-2.log");
-            TestLog.Write(f2, same);
-            var cmp = TestLog.Compare(sum, TestLog.ReadSummary(f2)!);
-            Check(cmp.Any(l => l.Contains("命中率")) && cmp.Any(l => l.Contains("配置相同")),
-                "identical setups compare, and the comparison says so");
-
-            same.ConfigSha = "ffff0000aaaa";          // pretend a patch changed the curve in between
-            var f4 = Path.Combine(dir, "round-test-4.log");
-            TestLog.Write(f4, same);
-            var cmpCfg = TestLog.Compare(sum, TestLog.ReadSummary(f4)!);
-            Check(cmpCfg.Any(l => l.Contains("配置变了")) && cmpCfg.Any(l => l.Contains("ffff00")),
-                "a different config sha is reported as the before/after of a settings change");
-
-            same.TargetDistancePx = 300;
-            var f3 = Path.Combine(dir, "round-test-3.log");
-            TestLog.Write(f3, same);
-            var cmp2 = TestLog.Compare(sum, TestLog.ReadSummary(f3)!);
-            Check(cmp2.Any(l => l.Contains("不能全归因")), "a different distance is still flagged as a confound");
-
-            // the shape numbers have to survive the file round trip, not just the in-memory one:
-            // this is the metric the next tuning decision rests on. Hand-set values, because the
-            // simulator flicks are perfectly straight (arc 0.00) and a 0==0 comparison would prove
-            // nothing about the plumbing.
-            var shape = new List<Trial>();
-            for (int i = 0; i < 12; i++)
-                shape.Add(new Trial
-                {
-                    DistancePx = 700, AngleRad = System.Math.PI / 4 + i * 0.05, Hit = true, HasPrimary = true,
-                    SampleCount = 9, MaxExtentPct = 101, PrimaryRadialPct = -3,
-                    ArcRatio = 0.42, LateralPathPx = 294, PerpPeakPx = 31, PathReversals = 1, AsymCoef = 0.08, AsymNum = 800, AsymDen = 10_000,
-                });
-            var memSt = RoundStats.Compute(shape, 26, 700);
-            var shapeData = new RoundData
-            {
-                RoundId = "round-test-5", When = data.When, DriverVersion = data.DriverVersion,
-                ProfileName = data.ProfileName, ConfigSha = data.ConfigSha, ConfigSource = data.ConfigSource,
-                ProfileJson = data.ProfileJson, Profile = data.Profile, Sensitivity = 1.5, MouseDpi = 600,
-                PollRate = 2000, TargetDistancePx = 700, RadiusPx = 26, TargetCount = 1, Seed = 99,
-                Mode = "点掉 12 球", Score = "点掉 12/12 球", SessionMs = 30000, Direction = "全向",
-                Resolution = "1920x1440@180", Trials = shape, OutputSpeed = data.OutputSpeed, TelemetryNote = "",
-            };
-            var f5 = Path.Combine(dir, "round-test-5.log");
-            TestLog.Write(f5, shapeData);
-            var sum5 = TestLog.ReadSummary(f5)!;
-            Check(Math.Abs(memSt.ArcRatioMedian - 0.42) < 1e-6 && memSt.HookCount == 12 && memSt.AsymN == 12
-                  && Math.Abs(memSt.AsymMean - 0.08) < 1e-6,
-                $"the statistics keep the shape numbers (arc {memSt.ArcRatioMedian:0.00}, hooks {memSt.HookCount}, " +
-                $"e {memSt.AsymMean:0.000} over n={memSt.AsymN} diagonal flicks)");
-            Check(Math.Abs(sum5.ArcRatio - 0.42) < 0.001 && sum5.HookCount == 12 && sum5.AsymN == 12
-                  && Math.Abs(sum5.AsymMean - 0.08) < 0.001 && Math.Abs(sum5.AsymSem - memSt.AsymSem) < 0.001,
-                $"and they come back out of the log file unchanged (arc {sum5.ArcRatio:0.00}, e {sum5.AsymMean:0.000} " +
-                $"+- {sum5.AsymSem:0.000}, n={sum5.AsymN})");
-            var idx = Path.Combine(dir, "index.csv");
-            Check(File.Exists(idx) && File.ReadAllLines(idx).Length >= 4,
-                "index.csv gets one row per round, in the redirected folder");
-
-            var lbl = new RoundSummary
-            {
-                File = @"C:\logs\round-2026-10-20_20-44-10-631.log", ConfigSha = "abcdef123456",
-                Mode = "点掉 30 球", Clicks = 12, BallsCleared = 9, HitRate = 75,
-            }.Label();
-            Check(lbl.Contains("20:44:10") && lbl.Contains("点掉 30 球") && lbl.Contains("9/12") && lbl.Contains("abcdef"),
-                "the picker label shows start time, mode, score and config: " + lbl);
-            var realIndex = Path.Combine(TestLog.LogDir, "index.csv");
-            Check(!File.Exists(realIndex) || !File.ReadAllText(realIndex).Contains("round-test-"),
-                "no test rows leaked into the real index.csv");
-        }
-        catch (Exception e)
-        {
-            Check(false, "unexpected exception in the log test: " + e.Message);
+            ScoreHistory.Clear();
+            Check(!File.Exists(file), "Clear removes the file instead of leaving an orphan header");
         }
         finally
         {
-            TestLog.IndexOverride = null;
+            ScoreHistory.DirOverride = prior;
             try { Directory.Delete(dir, true); } catch { }
         }
     }
 
-    // ---------- K ----------
-
-    static RoundSummary RS(string file, string sha, string mode, double dist, int balls, string when,
-                           double hit, double pace, double rad, double maxExtent = 0, int clicks = 60) =>
-        new()
-        {
-            File = file, ConfigSha = sha, Mode = mode, DistancePx = dist, TargetCount = balls,
-            When = when, HitRate = hit, KillsPerMinute = pace, RadialMedian = rad,
-            MaxExtentMedian = maxExtent, Clicks = clicks, BallsCleared = (int)Math.Round(clicks * hit / 100.0),
-        };
-
-    static void HistoryChecks()
+    static RoundRow Row(string when, int cleared, int clicks, double ms, string sha) => new()
     {
-        // grouping: newest group first, medians are true medians
-        var rounds = new List<RoundSummary>
-        {
-            RS("a1", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-21 16:56:48", 69.8, 88.8, +0.4),
-            RS("a2", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-21 16:57:28", 70.0, 97.9, +0.0),
-            RS("a3", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-21 16:58:05", 76.1, 102.0, +0.3),
-            RS("b1", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-20 23:31:00", 60.0, 84.0, +0.1),
-            RS("b2", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-20 23:32:00", 64.0, 86.0, +0.2),
-            RS("b3", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-20 23:33:00", 68.0, 88.0, +0.9),
-        };
-        var groups = History.Group(rounds);
-        Check(groups.Count == 2 && groups[0].Sha == "aaaaaaaa11" && groups[0].Rounds.Count == 3,
-            "rounds group by config+setup, newest group first");
-        Check(Math.Abs(groups[0].MedianHit - 70.0) < 0.01 && Math.Abs(groups[1].MedianHit - 64.0) < 0.01,
-            $"group medians are true medians ({groups[0].MedianHit:0.0} / {groups[1].MedianHit:0.0})");
+        When = when, Mode = "点掉 30 球", Cleared = cleared, Clicks = clicks, SessionMs = ms,
+        Balls = 3, DistancePx = 420, RadiusPx = 26, Direction = "全向",
+        Resolution = "3440x1440@180", PlanName = "压枪 1.25", ConfigSha = sha,
+    };
 
-        // config actually changed, difference beyond the noise floor -> say so, ask for confirmation
-        var v = History.CompareNewestTwo(rounds);
-        Check(v.Any(l => l.Contains("aaaaaa")) && v.Any(l => l.Contains("bbbbbb")), "both groups are described");
-        Check(v.Any(l => l.Contains("超过了噪声底")), $"a +6pp hit jump is called beyond the noise floor: {string.Join(" | ", v)}");
-        Check(v.Any(l => l.Contains("差值来自这次改动")), "same-conditions groups attribute the difference to the change");
-
-        // difference inside the noise floor -> no claim
-        rounds[0].HitRate = 65.0; rounds[1].HitRate = 65.5; rounds[2].HitRate = 66.0;    // median 65.5
-        var v2 = History.CompareNewestTwo(rounds);
-        Check(v2.Any(l => l.Contains("测不出差别")), "a +1.5pp move stays inside the noise floor and claims nothing");
-
-        // same config on both sides -> drift, not effect
-        var drift = rounds.Select(r => { r.ConfigSha = "aaaaaaaa11"; return r; }).ToList();
-        var v3 = History.CompareNewestTwo(drift);
-        Check(v3.Any(l => l.Contains("状态波动")) && !v3.Any(l => l.Contains("超过了噪声底")),
-            "same-sha groups are labelled as state drift, never as a parameter effect");
-
-        // confounded conditions -> not attributable
-        var conf = new List<RoundSummary>(rounds) { [2] = RS("a3", "cccccccc33", "30 秒限时", 420, 26, "2026-10-21 16:58:05", 76, 102, 0.3) };
-        var v4 = History.CompareNewestTwo(conf);
-        Check(v4.Any(l => l.Contains("不能全归因")), "a setup change between groups kills the attribution");
-
-        // A/B/A: the newest group is a REVERT to the config from two groups back. Reading
-        // newest-vs-previous there blames the change for what is actually warm-up drift.
-        var aba = new List<RoundSummary>
-        {
-            // A_new (16:00 on the 22nd) - the arm that came back
-            RS("n1", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 16:00:00", 70, 95, 0.0),
-            RS("n2", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 16:01:00", 70, 95, 0.0),
-            RS("n3", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 16:02:00", 70, 95, 0.0),
-            // B (15:00) - the change under test
-            RS("m1", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-22 15:00:00", 60, 90, 0.0),
-            RS("m2", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-22 15:01:00", 60, 90, 0.0),
-            RS("m3", "bbbbbbbb22", "30 秒限时", 700, 26, "2026-10-22 15:02:00", 60, 90, 0.0),
-            // A_old (14:00) - same config as A_new, 20pp lower: that gap IS the noise floor
-            RS("o1", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 14:00:00", 50, 85, 0.0),
-            RS("o2", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 14:01:00", 50, 85, 0.0),
-            RS("o3", "aaaaaaaa11", "30 秒限时", 700, 26, "2026-10-22 14:02:00", 50, 85, 0.0),
-        };
-        var abaGroups = History.Group(aba);
-        Check(abaGroups.Count == 3 && abaGroups[0].Sha == "aaaaaaaa11" && abaGroups[2].Sha == "aaaaaaaa11",
-            $"A/B/A stays three groups with the revert separate ({abaGroups.Count})");
-        var vAba = History.CompareNewestTwo(aba);
-        Check(vAba.Any(l => l.Contains("A→B→A")), "the revert is named as a revert, not as a new change");
-        Check(!vAba.Any(l => l.Contains("差值来自这次改动")), "A/B/A never attributes the newest gap to 'this change'");
-        Check(vAba.Any(l => l.Contains("两侧 A 自己差") && l.Contains("±20.0pp")),
-            $"the two A arms set the noise floor: {string.Join(" | ", vAba.Where(l => l.Contains("两侧 A")))}");
-        Check(vAba.Any(l => l.Contains("命中 A→B") && l.Contains("测不出差别")),
-            "B sits on the pooled A median, so the +10pp that newest-vs-previous would have called an effect is refused");
-
-        // open-loop availability marker
-        var stale = new RoundSummary { File = "x", ConfigSha = "a", Quality = { "IMPLIANT: 49 flicks ended on the ball yet their reconstructed path only reached 82% of the distance - the reconstruction is losing pointer travel, so max_extent/prim numbers this round are lower bounds" } };
-        var stale2 = new RoundSummary { File = "y", ConfigSha = "a", Quality = { "IMPLIANT: 59 flicks had no second surge yet their initial impulse is reported -26.0% off the target" } };
-        var fresh = new RoundSummary { File = "z", ConfigSha = "a" };
-        Check(!stale.OpenLoopUsable && !stale2.OpenLoopUsable && fresh.OpenLoopUsable,
-            "both broken-build eras are recognised by their guard texts; a clean round is usable");
-
-        // ---- archive round trip: files move, index stays consistent, nothing is deleted ----
-        var dir = Path.Combine(Path.GetTempPath(), "raui-archtest-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(dir);
-        TestLog.IndexOverride = dir;
-        try
-        {
-            var f1 = Path.Combine(dir, "round-arch-1.log");
-            var f2 = Path.Combine(dir, "round-arch-2.log");
-            File.WriteAllText(f1, "log one");
-            File.WriteAllText(f2, "log two");
-            var idx = Path.Combine(dir, "index.csv");
-            File.WriteAllLines(idx, new[]
-            {
-                "file;when;configSha",
-                "round-arch-1.log;2026-10-20 23:31:00;aaaaaaaa11",
-                "round-arch-2.log;2026-10-21 16:56:48;aaaaaaaa11",
-                "round-gone.log;2026-10-19 10:00:00;aaaaaaaa11",   // dangling from an older manual delete
-            });
-
-            var res = LogArchive.Archive(new[] { f1, Path.Combine(dir, "missing.log") });
-            Check(res.Moved == 1 && res.Failed.Count == 1, $"one file moved, the missing one is reported: {res.Moved} moved / {res.Failed.Count} failed");
-            Check(!File.Exists(f1), "the archived file is gone from logs\\");
-            var archived = Path.Combine(res.ArchiveDir, "round-arch-1.log");
-            Check(File.Exists(archived) && File.ReadAllText(archived) == "log one",
-                "and it is recoverable in the archive folder");
-            Check(File.Exists(f2), "the file that was not selected stays put");
-            var lines = File.ReadAllLines(idx);
-            Check(lines.Length == 2 && lines[1].StartsWith("round-arch-2.log"),
-                $"index.csv kept only the row whose file still exists ({string.Join(" / ", lines.Skip(1))}) - the dangling row went too");
-        }
-        finally
-        {
-            TestLog.IndexOverride = null;
-            try { Directory.Delete(dir, true); } catch { }
-        }
-
-        // ---- bilingual notes: generated together, so neither language can drift ----
-        var st = RoundStats.Compute(new List<Trial>
-        {
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 71, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 69, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 71, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
-            new() { DistancePx = 700, Hit = true, HasPrimary = true, MaxExtentPct = 70, PrimaryRadialPct = 0, SampleCount = 9 },
-        }, 26, 700);
-        Check(st.Notes.Count == st.Quality.Count && st.Notes.All(n => n.Zh.Length > 0),
-            $"every quality note has both languages ({st.Notes.Count} notes)");
-        var guard = st.Notes.FirstOrDefault(n => n.Warn);
-        Check(guard != null && guard.Zh.Contains("行程") && guard.En.Contains("losing pointer travel"),
-            "the travel guard speaks both languages");
-        Check(st.Notes.Any(n => !n.Warn && n.Zh.Contains("距离桶")),
-            $"the one-bucket note is present in Chinese: {string.Join(" | ", st.Notes.Select(n => n.Zh))}");
-        Check(st.Notes.Any(n => n.Zh.Contains("8 次点击")),
-            "numbers are interpolated into the Chinese text, not just the English one");
-    }
-
-    // ---------- L ----------
-
-    static void JitterChecks()
-    {
-        // The probe once corrupted its own stack: PeekMessageW writes 48 bytes of MSG, and a
-        // "tidier looking" field order had shrunk the struct to 40. Sizes are asserted here so the
-        // layout cannot drift back - the crash it caused looked like a null in an unrelated API.
-        var (msgSize, clsSize, ptSize) = PollJitter.MarshaledSizes;
-        Check(msgSize == 48 && clsSize == 80 && ptSize == 8,
-            $"Win32 struct sizes hold: MSG {msgSize} (48), WNDCLASSEX {clsSize} (80), POINT {ptSize} (8)");
-        var dir = Path.Combine(Path.GetTempPath(), "raui-jitter-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(dir);
-        try
-        {
-            var file = Path.Combine(dir, "settings.json");
-            File.WriteAllText(file, Json.Serialize(BaseDoc()));       // the same X curve the user runs
-
-            List<PollJitter.Pkt> Rhythm(double[] gapsUs)
-            {
-                var l = new List<PollJitter.Pkt>();
-                long t = 0;
-                foreach (var g in gapsUs) { t += (long)g; l.Add(new PollJitter.Pkt(t, 4, 0)); }
-                return l;
-            }
-            double[] Gaps(int every, double lateUs) =>
-                Enumerable.Range(0, 400).Select(i => i % every == 0 ? lateUs : 500.0).ToArray();
-
-            var perfect = PollJitter.Measure(Rhythm(Enumerable.Repeat(500.0, 400).ToArray()), file);
-            Check(perfect != null, "a 400 packet rhythm is measurable");
-            if (perfect == null) return;
-            Check(Math.Abs(perfect.Hz - 2000) < 1, $"a 500us rhythm reads as 2000Hz ({perfect.Hz:0} Hz)");
-            Check(perfect.Slow15 == 0 && perfect.Slow20 == 0 && perfect.Slow50 == 0,
-                "nothing is late in a perfect stream");
-            Check(perfect.Gain.All(g => Math.Abs(g.LossPct) < 1e-9),
-                "and a perfect stream costs exactly no gain at any speed");
-
-            var g4 = perfect.Gain.First(g => g.Speed == 4);
-            var g8 = perfect.Gain.First(g => g.Speed == 8);
-            var g16 = perfect.Gain.First(g => g.Speed == 16);
-            Check(g4.Ideal > 1 && g8.Ideal > g4.Ideal,
-                $"the curve is applied through the real model: 4 c/ms -> {g4.Ideal:0.000}x, 8 c/ms -> {g8.Ideal:0.000}x");
-            // Anchor on what must be exactly true, not on a remembered number: below the X offset
-            // of 3 counts/ms the curve does nothing at all. (Note this out/in is the per-packet
-            // multiplier; the graph's "peak gain 1.97x" is dOut/dIn, a different quantity.)
-            var g2 = perfect.Gain.First(g => g.Speed == 2);
-            Check(Math.Abs(g2.Ideal - 1.0) < 1e-9 && Math.Abs(g2.LossPct) < 1e-9,
-                $"below the X offset the curve is exactly inert: 2 c/ms -> {g2.Ideal:0.000}x");
-            Check(perfect.Gain.All(g => g.Ideal >= 1.0), "and no speed is ever demoted below 1.0x");
-            Check(g16.Ideal > g8.Ideal && g8.Ideal > 1.05,
-                $"the multiplier keeps growing through the flick range: 8 -> {g8.Ideal:0.000}x, 16 -> {g16.Ideal:0.000}x");
-
-            var late = PollJitter.Measure(Rhythm(Gaps(5, 1500)), file);
-            Check(late != null && Math.Abs(late!.MedUs - 500) < 1,
-                $"the median ignores the 3x late minority ({late?.MedUs:0}us stays at the true rate)");
-            Check(late != null && late.Slow20 > 15 && late.Slow20 < 25,
-                $"20% of packets are flagged as late ({late?.Slow20:0.0}%)");
-            var l8 = late!.Gain.First(g => g.Speed == 8);
-            Check(l8.Avg < l8.Ideal && l8.LossPct < -0.5,
-                $"late packets really do cost gain at 8 c/ms: {l8.Ideal:0.000}x -> {l8.Avg:0.000}x ({l8.LossPct:+0.0;-0.0}%)");
-
-            double LossAt(int every) =>
-                PollJitter.Measure(Rhythm(Gaps(every, 1500)), file)!.Gain.First(g => g.Speed == 8).LossPct;
-            var sparse = LossAt(10); var thick = LossAt(4);
-            Check(sparse < 0 && thick < sparse,
-                $"the loss scales with how many packets are late: 10% late {sparse:0.0}%, 25% late {thick:0.0}%");
-
-            // a 30ms gap is the hand stopping, not a late packet. It belongs in the timing stats
-            // but must never be priced as jitter - it would ask the curve about a near-stationary
-            // pointer and blame the result on the driver.
-            var pauses = Rhythm(Enumerable.Range(0, 400).Select(i => i % 20 == 0 ? 30_000.0 : 500.0).ToArray());
-            var withPauses = PollJitter.Measure(pauses, file)!;
-            Check(withPauses.Slow50 > 3, $"the pauses show up in the timing stats ({withPauses.Slow50:0.0}% over 5x)");
-            Check(withPauses.Gain.All(g => Math.Abs(g.LossPct) < 1e-9),
-                $"but they are not priced as jitter: gain loss stays {withPauses.Gain[3].LossPct:0.000}%");
-
-            Check(PollJitter.Measure(Rhythm(Enumerable.Repeat(500.0, 10).ToArray()), file) == null,
-                "a stream too short to say anything is refused instead of guessed");
-        }
-        catch (Exception e) { Check(false, "unexpected exception in the jitter test: " + e.Message); }
-        finally { try { Directory.Delete(dir, true); } catch { } }
-    }
-
-    // ---------- M ----------
+    // ---------- G ----------
 
     static void PresetChecks()
     {
@@ -1261,5 +398,38 @@ public static class SelfTests
                 "deleting a preset also removes its note file");
         }
         finally { Presets.DirOverride = prior; try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // ---------- H ----------
+
+    static void CurveChecks()
+    {
+        var plain = BaseProfile();
+        var x = CurveAnalysis.Analyze(Convert4.ToStruct(plain), true);
+        var y = CurveAnalysis.Analyze(Convert4.ToStruct(plain), false);
+        Check(Math.Abs(x.Threshold - 3) < 0.05, $"X starts accelerating at its own offset: {x.Threshold:0.00} counts/ms");
+        Check(Math.Abs(y.Threshold - 2.5) < 0.05, $"Y starts accelerating at its own offset: {y.Threshold:0.00} counts/ms");
+        Check(x.PeakGain > 1.9 && x.PeakGain < 2.05, $"X caps at the configured ratio ({x.PeakGain:0.000} against cap 1.97)");
+
+        // The output ratio is applied AFTER the accel stage, so it lifts the whole curve without
+        // moving where the acceleration begins. Comparing the threshold against a hard-coded 1.0
+        // used to report "0.00" for exactly the profiles that carry a vertical multiplier.
+        var boosted = BaseProfile();
+        boosted.YxRatio = 1.25;
+        var bx = CurveAnalysis.Analyze(Convert4.ToStruct(boosted), true);
+        var by = CurveAnalysis.Analyze(Convert4.ToStruct(boosted), false);
+        Check(Math.Abs(bx.Threshold - x.Threshold) < 1e-6,
+            $"a y/x ratio does not move the X threshold ({x.Threshold:0.00} -> {bx.Threshold:0.00})");
+        Check(Math.Abs(by.Threshold - y.Threshold) < 1e-6,
+            $"nor the Y one, only its baseline ({y.Threshold:0.00} -> {by.Threshold:0.00})");
+        Check(Math.Abs(by.PeakGain - 1.25 * y.PeakGain) < 1e-3,
+            $"Y's peak gain carries the multiplier ({y.PeakGain:0.000} -> {by.PeakGain:0.000})");
+
+        var flat = BaseProfile();
+        flat.X.Acceleration = 0; flat.X.Cap.X = 0; flat.X.Cap.Y = 0;
+        flat.Y.Acceleration = 0; flat.Y.Cap.X = 0; flat.Y.Cap.Y = 0;
+        var fx = CurveAnalysis.Analyze(Convert4.ToStruct(flat), true);
+        Check(fx.Threshold == 0 && double.IsInfinity(fx.CapSpeed) && Math.Abs(fx.PeakGain - 1) < 1e-6,
+            "a profile with no acceleration reads as no acceleration (threshold 0, no cap, gain 1)");
     }
 }

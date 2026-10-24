@@ -25,25 +25,6 @@ public sealed class CurveChart : FrameworkElement
         nameof(YLabel), typeof(string), typeof(CurveChart), new PropertyMetadata("", (o, e) => ((CurveChart)o).InvalidateVisual()));
     public string YLabel { get => (string)GetValue(YLabelProperty); set => SetValue(YLabelProperty, value); }
 
-    public IEnumerable<CurvePoint> Samples
-    {
-        get => (IEnumerable<CurvePoint>)GetValue(SamplesProperty);
-        set => SetValue(SamplesProperty, value);
-    }
-    public static readonly DependencyProperty SamplesProperty = DependencyProperty.Register(
-        nameof(Samples), typeof(IEnumerable<CurvePoint>), typeof(CurveChart),
-        new PropertyMetadata(null, (o, e) => ((CurveChart)o).InvalidateVisual()));
-
-    /// <summary>Measured hand-speed distribution: X = axis position, Y = 0..1 normalized count.</summary>
-    public static readonly DependencyProperty HistogramProperty = DependencyProperty.Register(
-        nameof(Histogram), typeof(IEnumerable<CurvePoint>), typeof(CurveChart),
-        new PropertyMetadata(null, (o, e) => ((CurveChart)o).InvalidateVisual()));
-    public IEnumerable<CurvePoint> Histogram
-    {
-        get => (IEnumerable<CurvePoint>)GetValue(HistogramProperty);
-        set => SetValue(HistogramProperty, value);
-    }
-
     /// <summary>Vertical reference lines, each with the text that says what it is.</summary>
     public static readonly DependencyProperty MarkersProperty = DependencyProperty.Register(
         nameof(Markers), typeof(IEnumerable<ChartMarker>), typeof(CurveChart),
@@ -54,7 +35,7 @@ public sealed class CurveChart : FrameworkElement
         set => SetValue(MarkersProperty, value);
     }
 
-    /// <summary>Hand-speed bands (不加速 / 加速中 / 已封顶) with the share of real movement in each.</summary>
+    /// <summary>Curve bands (不加速 / 加速中 / 已封顶), shaded straight from the profile.</summary>
     public static readonly DependencyProperty ZonesProperty = DependencyProperty.Register(
         nameof(Zones), typeof(IEnumerable<ChartZone>), typeof(CurveChart),
         new PropertyMetadata(null, (o, e) => ((CurveChart)o).InvalidateVisual()));
@@ -81,8 +62,7 @@ public sealed class CurveChart : FrameworkElement
         if (w < 60 || h < 60) return;
 
         var series = Series?.ToList() ?? new();
-        var samples = Samples?.ToList() ?? new();
-        bool hasAny = series.Any(s => s.Points.Count > 0) || samples.Count > 0;
+        bool hasAny = series.Any(s => s.Points.Count > 0);
 
         double left = 56, right = 14, top = 14, bottom = 34;
         var plot = new Rect(left, top, Math.Max(1, w - left - right), Math.Max(1, h - top - bottom));
@@ -96,11 +76,6 @@ public sealed class CurveChart : FrameworkElement
                 if (double.IsFinite(p.X)) maxX = Math.Max(maxX, p.X);
                 if (double.IsFinite(p.Y)) { maxY = Math.Max(maxY, p.Y); minY = Math.Min(minY, p.Y); }
             }
-        foreach (var p in samples)
-        {
-            if (double.IsFinite(p.X)) maxX = Math.Max(maxX, p.X);
-            if (double.IsFinite(p.Y)) { maxY = Math.Max(maxY, p.Y); minY = Math.Min(minY, p.Y); }
-        }
         if (!hasAny)
         {
             var none = new FormattedText("没有可显示的曲线",
@@ -160,22 +135,6 @@ public sealed class CurveChart : FrameworkElement
 
         dc.DrawRectangle(null, axisPen, plot);
 
-        // measured hand-speed distribution, drawn as a band along the floor of the plot
-        var hist = Histogram?.ToList() ?? new();
-        if (hist.Count > 0)
-        {
-            var hb = new SolidColorBrush(Color.FromArgb(0x4D, 0x4C, 0xC2, 0xFF)); hb.Freeze();
-            double band = plot.Height * 0.30;
-            double barW = Math.Max(2, plot.Width / (hist.Count * 1.6));
-            foreach (var bar2 in hist)
-            {
-                if (!double.IsFinite(bar2.X) || !double.IsFinite(bar2.Y)) continue;
-                double x = plot.X + plot.Width * (bar2.X / maxX);
-                double hh = band * Math.Clamp(bar2.Y, 0, 1);
-                dc.DrawRectangle(hb, null, new Rect(x - barW / 2, plot.Bottom - hh, barW, hh));
-            }
-        }
-
         // Acceleration start / cap lines, each labelled. Four identical unlabelled dashes read as
         // noise; the whole reason these exist is to say "the curve does nothing left of here".
         double lastPx = double.MinValue;
@@ -195,18 +154,14 @@ public sealed class CurveChart : FrameworkElement
             DrawLabel(dc, m.Label, face, 10, m.Color, x, plot.Top + 3 + stagger * 13, dpi, true);
         }
 
-        // The share of real hand movement in each band, printed inside the band itself: this is the
-        // line that answers "does the acceleration ever engage for me".
+        // The band name, printed inside the band when there is room for it.
         foreach (var z in zones)
         {
             if (!double.IsFinite(z.From) || !double.IsFinite(z.To)) continue;
             double x0 = plot.X + plot.Width * Math.Clamp(z.From / maxX, 0, 1);
             double x1 = plot.X + plot.Width * Math.Clamp(z.To / maxX, 0, 1);
             if (x1 - x0 < 52) continue;                       // no room: the band itself says enough
-            // the bands belong to the curve, the percentages to the samples - before he has moved
-            // there is nothing to claim, so the name stands alone rather than showing "NaN%"
-            string cap = double.IsNaN(z.Share) || z.Share <= 0 ? z.Name : $"{z.Name} {z.Share:0}%";
-            DrawLabel(dc, cap, face, 10.5, Text, (x0 + x1) / 2, plot.Bottom - 18, dpi, true);
+            DrawLabel(dc, z.Name, face, 10.5, Text, (x0 + x1) / 2, plot.Bottom - 18, dpi, true);
         }
 
         foreach (var s in series)
@@ -229,17 +184,6 @@ public sealed class CurveChart : FrameworkElement
             if (s.Dashed) pen2.DashStyle = new DashStyle(new double[] { 4, 4 }, 0);
             pen2.Freeze();
             dc.DrawGeometry(null, pen2, geo);
-        }
-
-        if (samples.Count > 0)
-        {
-            var fb = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); fb.Freeze();
-            foreach (var p in samples)
-            {
-                if (!double.IsFinite(p.X) || !double.IsFinite(p.Y)) continue;
-                var pt = Map(p.X, p.Y);
-                dc.DrawEllipse(fb, null, pt, 2.4, 2.4);
-            }
         }
 
         // axis titles

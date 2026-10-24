@@ -9,10 +9,9 @@ namespace RaUI.View;
 public partial class TestPage : UserControl
 {
     readonly List<Trial> trials = new();
-    AppState.RoundContext? frozen;
+    AppState.CurveContext? frozen;
     FlickWindow? lastWindow;
     SessionRule? lastRule;
-    string roundId = "";
 
     public TestPage()
     {
@@ -154,28 +153,23 @@ public partial class TestPage : UserControl
         Summary.Visibility = Visibility.Collapsed;
         lastWindow = null;
         lastRule = null;
-        App.State.Speeds?.Clear();
 
-        // Keep the pre-round context for compatible background records; never write to the driver.
+        // Which curve the mouse is served by when the round starts - recorded with the score so
+        // the history says WHAT produced it. Read-only: starting a test never writes to the driver.
         frozen = null;
-        try { frozen = App.State.CaptureRoundContext(DeviceId); }
+        try { frozen = App.State.CaptureLiveCurve(DeviceId); }
         catch (Exception e) { App.State.Status = "本轮起点没能读取：" + e.Message; }
 
-        roundId = TestLog.NewRoundId();
         var cfg = new FlickWindow.Config
         {
-            AngleDeg = AppState.Prefs.TestAngleDeg,
             DistancePx = DistancePx,
             RadiusPx = RadiusPx,
             TargetCount = Balls,
             Mode = Mode,
             Trials = BallGoal,
             Seconds = Seconds,
-            Sensitivity = Sens,
-            Dpi = Dpi,
             DirectionMode = DirMode,
             Seed = Seed,
-            DeviceId = DeviceId,
             CrossArm = CrossArm,
             CrossGap = CrossGap,
             CrossColor = CrossColor,
@@ -193,7 +187,8 @@ public partial class TestPage : UserControl
             lastRule = w.Rule;
             int cleared = trials.Count(t => t.Hit);
             double hitRate = trials.Count == 0 ? 0 : cleared * 100.0 / trials.Count;
-            Summary.Text = $"本次：点掉{cleared}球，命中{hitRate:0}%，用时{w.Rule.ElapsedMs / 1000.0:0.#}秒";
+            Summary.Text = $"本次：点掉{cleared}球，命中{hitRate:0}%，用时{w.Rule.ElapsedMs / 1000.0:0.#}秒" +
+                           (w.RoundNotice.Length > 0 ? $"（{w.RoundNotice}）" : "");
             Summary.Visibility = Visibility.Visible;
         });
         w.Closed += (_, _) =>
@@ -214,7 +209,7 @@ public partial class TestPage : UserControl
             try
             {
                 RefreshPlan();
-                WriteLog();
+                WriteHistory();
                 FillRounds();
             }
             finally
@@ -226,53 +221,34 @@ public partial class TestPage : UserControl
         w.Activate();
     }
 
-    // ---------- background log ----------
+    // ---------- score history ----------
 
-    void WriteLog()
+    void WriteHistory()
     {
-        if (frozen == null || trials.Count == 0) return;
+        if (trials.Count == 0) return;
         try
         {
-            var rec = App.State.Speeds;
-            var sp = rec?.Percentiles(byComponent: frozen.Profile.speed_processor_args.whole == 0)
-                     ?? (0, 0, 0, 0, 0, 0);
-            TestLog.Write(TestLog.RoundPath(roundId), new RoundData
+            ScoreHistory.Append(new RoundRow
             {
-                RoundId = roundId,
                 When = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                DriverVersion = frozen.DriverVersion,
-                ProfileName = frozen.ProfileName,
-                ConfigSha = frozen.ConfigSha,
-                ConfigSource = frozen.Source,
-                ProfileJson = frozen.ProfileJson,
-                Profile = frozen.Profile,
-                DeviceId = frozen.DeviceId,
-                DeviceName = frozen.DeviceName,
-                Sensitivity = Sens,
-                MouseDpi = Dpi,
-                PollRate = AppState.Prefs.ChartPollRate,
                 Mode = ModeLabel,
-                Score = lastRule?.Score() ?? "",
+                Cleared = trials.Count(t => t.Hit),
+                Clicks = trials.Count,
                 SessionMs = lastRule?.ElapsedMs ?? 0,
-                TargetDistancePx = DistancePx,
+                Balls = Balls,
+                DistancePx = DistancePx,
                 RadiusPx = RadiusPx,
-                TargetCount = Balls,
-                Seed = Seed,
                 Direction = DirName,
                 Resolution = lastWindow?.UsedResolution ?? "",
-                Trials = new List<Trial>(trials),
-                OutputSpeed = (sp.p50, sp.p75, sp.p95, sp.peak),
-                TelemetryNote = (lastWindow?.TelemetryNote ?? "") + (lastWindow?.DisplayWarning ?? "") +
-                                (lastWindow != null ? $" | end={lastWindow.EndReason}" : ""),
+                PlanName = frozen?.ProfileName ?? "",
+                ConfigSha = frozen?.ConfigSha ?? "",
             });
         }
         catch (Exception e)
         {
-            App.State.Status = "写日志失败：" + e.Message;
+            App.State.Status = "成绩没存下来：" + e.Message;
         }
     }
-
-    // ---------- score history ----------
 
     public sealed class ScoreRow
     {
@@ -283,12 +259,11 @@ public partial class TestPage : UserControl
 
     void FillRounds()
     {
-        HistoryList.ItemsSource = TestLog.Rounds(80).Select(r => new ScoreRow
+        HistoryList.ItemsSource = ScoreHistory.Recent(80).Select(r => new ScoreRow
         {
-            Time = DateTime.TryParseExact(System.IO.Path.GetFileNameWithoutExtension(r.File),
-                "'round-'yyyy-MM-dd_HH-mm-ss-fff", CultureInfo.InvariantCulture, DateTimeStyles.None, out var when)
+            Time = DateTime.TryParse(r.When, out var when)
                 ? when.ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : r.When,
-            Cleared = r.BallsCleared,
+            Cleared = r.Cleared,
             HitRate = $"{r.HitRate:0}%",
         }).ToList();
     }

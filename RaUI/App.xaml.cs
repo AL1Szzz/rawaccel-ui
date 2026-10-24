@@ -13,7 +13,7 @@ public partial class App : Application
     /// <summary>Only the tray menu / 退出 sets this; closing the window is otherwise "hide to tray".</summary>
     public static bool IsExiting { get; private set; }
 
-    /// <summary>Headless render check: do not register raw input or start the telemetry timer.</summary>
+    /// <summary>Offscreen render check (--dump-ui / --dump-flick / --dump-tray): no window on screen, no timer.</summary>
     public static bool Headless { get; private set; }
 
     public static void ExitApplication()
@@ -258,7 +258,6 @@ public partial class App : Application
         const double cx = 960, cy = 700;
         var cfg = new FlickWindow.Config
         {
-            AngleDeg = 15,
             DistancePx = 420,
             RadiusPx = 26,
             TargetCount = 8,

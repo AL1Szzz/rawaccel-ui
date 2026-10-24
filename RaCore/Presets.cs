@@ -26,8 +26,8 @@ public sealed record Preset(string Name, string Sha, string File, string Summary
 /// a saved SNAPSHOT of the profile that the mouse actually resolves to - the switch replaces
 /// that profile's contents and keeps its name, so no device reference is ever left dangling.
 ///
-/// Files are written in the same RootDto shape as settings.json (and as the older
-/// D:\RawAccelUI\curves\*.json experiments), so one folder can hold both.
+/// Files are written in the same RootDto shape as settings.json, so a saved plan can be opened
+/// and edited by the official tool too.
 ///
 /// Names are meant to be read, not decoded: "压枪 1.25", not "V125". The hex sha stays in the
 /// tooltip for the assistant's cross-checking, never in the button.
@@ -35,7 +35,7 @@ public sealed record Preset(string Name, string Sha, string File, string Summary
 public static class Presets
 {
     /// <summary>Test hook: point the library somewhere else, so a self-test can never move or
-    /// delete a real preset (same pattern as TestLog.IndexOverride).</summary>
+    /// delete a real preset (same pattern as ScoreHistory.DirOverride).</summary>
     public static string? DirOverride;
 
     public static string Dir => Path.Combine(DirOverride ?? AppData.Root, "presets");
@@ -144,19 +144,6 @@ public static class Presets
             return true;
         }
         catch (Exception e) { error = "删不掉：" + e.Message; return false; }
-    }
-
-    /// <summary>
-    /// Copy a curve file in from anywhere (for example the experiment files in
-    /// D:\RawAccelUI\curves). Validated before it is accepted, because an imported
-    /// junk file would otherwise only reveal itself at the moment someone writes it to the driver.
-    /// </summary>
-    public static string? Import(string sourceFile, string name, out string error, string note = "")
-    {
-        error = "";
-        var p = TryLoad(sourceFile);
-        if (p == null) { error = "这个文件里没有可用的 profile"; return null; }
-        return Save(name, p, out error, note);
     }
 
     /// <summary>

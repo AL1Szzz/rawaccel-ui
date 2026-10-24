@@ -1,18 +1,16 @@
 namespace RaCore;
 
 /// <summary>
-/// One shared data folder for every build of this UI (%LOCALAPPDATA%\RawAccelUI). Logs, the
-/// AI-patch audit trail and the UI prefs used to live next to the executable, so shipping a
-/// new release-5 silently orphaned the rounds measured with release-4 and made before/after
-/// comparisons impossible. Falls back to the executable directory when app-data is not usable.
+/// One shared data folder for every build of this UI (%LOCALAPPDATA%\RawAccelUI). The ball-test
+/// history and the UI prefs used to live next to the executable, so shipping a new release
+/// silently orphaned them; everything now resolves here, with a fallback to the executable
+/// directory when app-data is not usable.
 /// </summary>
 public static class AppData
 {
     static readonly Lazy<string> root = new(Resolve);
 
     public static string Root => root.Value;
-    public static string LogDir => Path.Combine(Root, "logs");
-    public static string AuditDir => Path.Combine(Root, "patches");
 
     /// <summary>What the folder actually resolved to, for the settings page to display.</summary>
     public static string Location => Root;
@@ -41,35 +39,22 @@ public static class AppData
     }
 
     /// <summary>
-    /// Copy the per-directory state over once. Never overwrites: the newest exe wins only when
-    /// the shared copy is still missing, so an interrupted migration cannot lose rounds.
+    /// Pick up prefs that an older build left next to the exe, once. Never overwrites, so an
+    /// interrupted migration cannot lose the newer copy.
     /// </summary>
     static void Migrate(string target)
     {
         try
         {
             var local = AppContext.BaseDirectory;
-            CopyInto(Path.Combine(local, "logs"), Path.Combine(target, "logs"));
-            CopyInto(Path.Combine(local, "patches"), Path.Combine(target, "patches"));
-            var prefs = Path.Combine(target, "raui.ui.json");
-            if (!File.Exists(prefs) && File.Exists(Path.Combine(local, "raui.ui.json")))
-                File.Copy(Path.Combine(local, "raui.ui.json"), prefs);
-        }
-        catch { /* a failed migration must not stop the app; the old files are still there */ }
-    }
-
-    static void CopyInto(string from, string to)
-    {
-        try
-        {
-            if (!Directory.Exists(from)) return;
-            Directory.CreateDirectory(to);
-            foreach (var f in Directory.GetFiles(from))
+            if (string.Equals(local, target, StringComparison.OrdinalIgnoreCase)) return;
+            foreach (var name in new[] { "raui.ui.json", "test-history.csv" })
             {
-                var dst = Path.Combine(to, Path.GetFileName(f));
-                if (!File.Exists(dst)) File.Copy(f, dst);
+                var dst = Path.Combine(target, name);
+                var src = Path.Combine(local, name);
+                if (!File.Exists(dst) && File.Exists(src)) File.Copy(src, dst);
             }
         }
-        catch { }
+        catch { /* a failed migration must not stop the app; the old files are still there */ }
     }
 }

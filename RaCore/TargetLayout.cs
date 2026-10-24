@@ -81,18 +81,7 @@ public static class TargetLayout
     static double Dist(double ax, double ay, double bx, double by)
         => Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
 
-    /// <summary>Radial (+ = beyond the target) and tangential error of a click relative to the aim direction.</summary>
-    public static (double radial, double tangential, double error, double radialPct) Score(
-        double clickX, double clickY, double originX, double originY, double targetX, double targetY)
-    {
-        double ax = targetX - originX, ay = targetY - originY;
-        double len = Math.Sqrt(ax * ax + ay * ay);
-        if (len < 1e-6) { double e = Dist(clickX, clickY, targetX, targetY); return (0, 0, e, 0); }
-        ax /= len; ay /= len;
-        double cx = clickX - originX, cy = clickY - originY;
-        double along = cx * ax + cy * ay;                      // how far along the aim direction the pointer went
-        double radial = along - len;                           // + = overshoot
-        double tang = -cx * ay + cy * ax;                      // perpendicular offset from the aim line
-        return (radial, tang, Dist(clickX, clickY, targetX, targetY), radial / len * 100.0);
-    }
+    /// <summary>How far the click missed the ball centre, in desktop pixels.</summary>
+    public static double Error(double clickX, double clickY, double targetX, double targetY) =>
+        Dist(clickX, clickY, targetX, targetY);
 }

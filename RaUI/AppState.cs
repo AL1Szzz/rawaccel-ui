@@ -24,12 +24,9 @@ public enum CurveKind { Sensitivity, Gain }
 /// <summary>A vertical reference line that says what it is: an unlabeled dashed line is noise.</summary>
 public sealed record ChartMarker(double At, string Label, Brush Color);
 
-/// <summary>
-/// A stretch of the hand-speed axis where the curve behaves the same way, with the share of the
-/// user's actual recent movements that landed in it. That share is the number that answers
-/// "does the acceleration ever engage for me" - the curve shape alone cannot.
-/// </summary>
-public sealed record ChartZone(double From, double To, string Name, double Share, Brush Tint);
+/// <summary>A stretch of the speed axis where the curve behaves the same way, shaded so the eye
+/// reads "no acceleration / accelerating / capped" without a legend.</summary>
+public sealed record ChartZone(double From, double To, string Name, Brush Tint);
 
 /// <summary>App state: one document, the driver, and the derived curves.</summary>
 public sealed class AppState : INotifyPropertyChanged
@@ -119,55 +116,25 @@ public sealed class AppState : INotifyPropertyChanged
     public string XAxisLabel { get; private set; } = "输入速度 (counts/ms)";
     public string YAxisLabel { get; private set; } = "灵敏度";
 
-    // ---------- live hand-speed telemetry ----------
+    // ---------- chart output ----------
 
-    public MouseMonitor? Monitor { get; private set; }
-
-    public SpeedRecorder? Speeds => Monitor?.Recorder;
-
-    bool showSamples;
-    public bool ShowSamples
-    {
-        get => showSamples;
-        set { showSamples = value; Raise(); RebuildCurves(); }
-    }
-
-    public List<CurvePoint> Histogram { get; private set; } = new();
     public List<ChartMarker> Markers { get; private set; } = new();
     public List<ChartZone> Zones { get; private set; } = new();
-    public string Telemetry { get; private set; } = "未开始采样";
 
-    public void AttachMonitor(Window w)
+    /// <summary>Re-evaluating the whole curve costs ~120ms, so the chart only rebuilds when the
+    /// document actually changed - not on every animation frame.</summary>
+    public void StartAutoRefresh()
     {
-        if (Monitor != null) return;
-        try
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        timer.Tick += (_, _) =>
         {
-            Monitor = new MouseMonitor(w);
-            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-            timer.Tick += (_, _) =>
-            {
-                // only rebuild when something actually changed; a 120ms full re-evaluation of
-                // the curve starves the input queue and contaminates the very timings we record.
-                // Poll the monotonic window counter, not Count: the ring buffer pins at Capacity
-                // after ~2 min of movement and then looks frozen while samples keep arriving.
-                var hash = ConfigHash.OfDoc(doc);
-                if (hash != lastCurveHash || (Speeds?.Windows ?? 0) != lastSampleWindows)
-                {
-                    RebuildCurves();
-                    Raise(nameof(Telemetry));
-                }
-            };
-            timer.Start();
-            Raise(nameof(Monitor));
-        }
-        catch (Exception e)
-        {
-            Status = "实时采样启动失败：" + e.Message;
-        }
+            var hash = ConfigHash.OfDoc(doc);
+            if (hash != lastCurveHash) RebuildCurves();
+        };
+        timer.Start();
     }
 
     string lastCurveHash = "";
-    long lastSampleWindows = -1;
 
     /// <summary>UI preferences (display scaling, game sens). Never written to the driver.</summary>
     public static UiPrefs Prefs { get; private set; } = UiPrefs.Load();
@@ -183,14 +150,14 @@ public sealed class AppState : INotifyPropertyChanged
         if (dpi <= 0 || sens <= 0) return "填上鼠标 DPI 和游戏灵敏度后，这里会给出 cm/s 与 °/s 的对照。";
 
         double CmsToCms(double countsPerMs) => countsPerMs * 2.54 * 1000 / dpi;         // cm/s
-        double CmsToDeg(double countsPerMs) => countsPerMs * RaCore.Cs2.DegreesPerCount(sens) * 1000;
+        double CmsToDeg(double countsPerMs) => countsPerMs * SourceAim.DegreesPerCount(sens) * 1000;
 
         var ax = Analyze(p, true);
         var ay = Analyze(p, false);
         double perPacket = poll > 0 ? 1000.0 / poll : 1.0;
 
         var sb = new System.Text.StringBuilder();
-        sb.Append($"eDPI {dpi * sens:0} · {RaCore.Cs2.CmPer360(sens, dpi):0.0} cm/360（{RaCore.Cs2.CmPer360(sens, dpi) / 2:0.0} cm/180°）");
+        sb.Append($"eDPI {dpi * sens:0} · {SourceAim.CmPer360(sens, dpi):0.0} cm/360（{SourceAim.CmPer360(sens, dpi) / 2:0.0} cm/180°）");
         sb.Append($"   |   X 阈值 {ax.threshold:0.00} c/ms = {CmsToCms(ax.threshold):0} cm/s = {CmsToDeg(ax.threshold):0} °/s" +
                   $"（{poll:0}Hz 下每包 {ax.threshold * perPacket:0.0} counts = {ax.threshold * perPacket / dpi * 25.4:0.00} mm）");
         if (!double.IsInfinity(ax.capSpeed))
@@ -199,20 +166,6 @@ public sealed class AppState : INotifyPropertyChanged
         if (!double.IsInfinity(ay.capSpeed))
             sb.Append($"，封顶于 {CmsToCms(ay.capSpeed):0} cm/s，峰值有效灵敏度 {sens * ay.capValue:0.00}");
         return sb.ToString();
-    }
-
-    public string DescribeSpeeds()
-    {
-        var r = Speeds;
-        if (r == null) return "未开始采样";
-        if (!Monitor!.Active) return "WM_INPUT 注册失败，实时采样不可用";
-        var snap = r.Snapshot();
-        if (snap.Count < 5) return "移动鼠标开始采样…";
-        var p = r.Percentiles(byComponent: SelectedProfile?.Speed.Whole == false);
-        string F(double v) => ChartDpi > 0
-            ? $"{v:0.00} counts/ms（{Cs2.CmsToCmPerSec(v, ChartDpi):0} cm/s）"
-            : $"{v:0.00} counts/ms";
-        return $"中位 {F(p.p50)}   ·   常用上沿 {F(p.p75)}   ·   甩动峰值 {F(p.p95)}   ·   样本 {snap.Count}";
     }
 
     // ---------- devices & presets ----------
@@ -465,41 +418,32 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Freezes what the driver is ACTUALLY running right now, so a round log can never be
-    /// attributed to a curve that was only sitting in the UI. Falls back to the file / draft
-    /// and says so, because those are not what the mouse went through.
+    /// Freezes which curve the mouse is actually served by right now, so a score row can name
+    /// the plan it was achieved with. Falls back to the file / draft and says so, because those
+    /// are not what the mouse went through.
     /// </summary>
-    public RoundContext CaptureRoundContext(string deviceId)
+    public CurveContext CaptureLiveCurve(string deviceId)
     {
-        var c = new RoundContext { DeviceId = deviceId };
+        var c = new CurveContext { DeviceId = deviceId };
         ProbeDriver();
-        c.DriverVersion = DriverInfo;
 
         if (DriverReachable)
         {
             try
             {
-                var blob = RaDevice.Read();
-                var fromDriver = Convert4.ReadBlob(blob);
-                c.BlobBefore = blob;
-                c.DeviceName = fromDriver.Devices.FirstOrDefault(d => d.Id == deviceId)?.Name ?? "";
-                var p = fromDriver.Profiles.FirstOrDefault(x => x.Name == (SelectedProfile?.Name ?? ""))
-                        ?? fromDriver.Profiles.FirstOrDefault();
-                if (p == null)
+                var live = Convert4.ReadBlob(RaDevice.Read());
+                c.Source = "driver（本轮真正生效的配置）";
+                c.DeviceName = live.Devices.FirstOrDefault(d => d.Id == deviceId)?.Name ?? "";
+                int idx = RaCore.Presets.TargetIndex(live, deviceId);
+                if (idx >= live.Profiles.Count)
                 {
                     c.Source = "driver 里是空的（当前所有鼠标都没有加速）";
-                    c.Profile = default;
                     c.ProfileName = "(none)";
                     c.ConfigSha = "000000000000";
-                    c.Doc = fromDriver;
                     return c;
                 }
-                c.Source = "driver（本轮真正生效的配置）";
-                c.Doc = fromDriver;
-                c.ProfileName = p.Name;
-                c.Profile = Convert4.ToStruct(p);
-                c.ConfigSha = ConfigHash.Of(p);
-                c.ProfileJson = Json.Serialize(fromDriver);
+                c.ProfileName = live.Profiles[idx].Name;
+                c.ConfigSha = ConfigHash.Of(live.Profiles[idx]);
                 return c;
             }
             catch (Exception e)
@@ -512,28 +456,20 @@ public sealed class AppState : INotifyPropertyChanged
             c.Source = File.Exists(SettingsPath) ? "settings.json（驱动没连上，本轮不代表实际生效值）" : "界面草稿（驱动没连上）";
         }
 
-        var sel = SelectedProfile;
-        c.Doc = doc;
+        var sel = SelectedProfile ?? doc.Profiles.FirstOrDefault();
         c.ProfileName = sel?.Name ?? "(none)";
-        c.Profile = sel == null ? default : Convert4.ToStruct(sel);
-        c.ConfigSha = sel == null ? "000000000000" : ConfigHash.Of(sel);
-        c.ProfileJson = Json.Serialize(doc);
         c.DeviceName = doc.Devices.FirstOrDefault(d => d.Id == deviceId)?.Name ?? "";
+        c.ConfigSha = sel == null ? "000000000000" : ConfigHash.Of(sel);
         return c;
     }
 
-    public sealed class RoundContext
+    public sealed class CurveContext
     {
         public string Source = "unknown";
-        public string DriverVersion = "";
         public string ProfileName = "";
         public string ConfigSha = "";
-        public string ProfileJson = "";
         public string DeviceId = "";
         public string DeviceName = "";
-        public ra_profile Profile;
-        public RootDto Doc = new();
-        public byte[]? BlobBefore;
     }
 
     /// <summary>Writes the whole document to the driver. The driver enforces a 1s throttle.</summary>
@@ -717,55 +653,6 @@ public sealed class AppState : INotifyPropertyChanged
         Touch();
     }
 
-    public void SavePreset(string name)
-    {
-        var p = SelectedProfile ?? doc.Profiles.FirstOrDefault();
-        if (p == null) { Status = "没有可保存的 profile"; return; }
-        var file = RaCore.Presets.Save(name, p, out string err);
-        Status = err.Length > 0 ? err
-            : "已存下「" + Path.GetFileNameWithoutExtension(file) + "」。想换名字就先删掉再存一次。";
-    }
-
-    public void DeletePreset(string name)
-    {
-        if (!RaCore.Presets.Delete(name, out string err)) Status = err;
-        else Status = "已删掉「" + name + "」（驱动没动）";
-    }
-
-    /// <summary>File-name to readable-label map for the experiment files made before the curve
-    /// list existed. Anything not listed is imported under its own file name.</summary>
-    static readonly Dictionary<string, (string label, string note)> CurveRename = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["A-accel0.06"] = ("基线", "你用了大半年的原样：横向 3 起加速、强度 0.06、最多 1.97 倍；纵向不额外加成。怀疑哪次改动有问题，就切回这条当对照。"),
-        ["V-yx1.25"] = ("压枪 1.25", "只把纵向输出整体乘 1.25（等效垂直灵敏度 1.5→1.875），横向和加速曲线都不动。压枪时同样的手下压，准星多走 25%；觉得过头就再存一条 1.2 或 1.15。"),
-        ["B-accel0.12"] = ("横向加倍（旧实验）", "横向加速强度 0.06→0.12，其余同基线。这条当时没做完，留着当备选。"),
-        // Y-yoffset0.75 is deliberately NOT imported: the 2026-10-22 A/B/A showed the Y accel
-        // curve cannot reach spray speeds at all, so offering it as a curve only adds a button
-        // that does nothing. It stays in git and in curves\ if it is ever needed again.
-    };
-
-    /// <summary>
-    /// Bring the experiment files from the repo's curves\ folder into the list, under readable
-    /// names, so the snapshots made over the last two days are not a second disconnected set.
-    /// </summary>
-    public int ImportCurveFiles()
-    {
-        string dir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "curves"));
-        if (!Directory.Exists(dir)) { Status = "没有找到 curves 目录：" + dir; return 0; }
-        int n = 0, skipped = 0;
-        foreach (var f in Directory.GetFiles(dir, "*.json"))
-        {
-            string key = Path.GetFileNameWithoutExtension(f);
-            var hit = CurveRename.TryGetValue(key, out var mapped) ? mapped : (key, "");
-            if (hit.Item1.Length == 0) { skipped++; continue; }
-            if (RaCore.Presets.Import(f, hit.Item1, out _, hit.Item2) != null) n++;
-        }
-        Status = n > 0
-            ? $"从 curves 导入 {n} 条曲线" + (skipped > 0 ? $"，跳过 {skipped} 条已判定无效的旧实验" : "")
-            : "curves 里没有能导入的文件";
-        return n;
-    }
-
     // ---------- curve math (identical to the driver's own headers) ----------
 
     /// <summary>
@@ -790,12 +677,11 @@ public sealed class AppState : INotifyPropertyChanged
     public void RebuildCurves()
     {
         var p = selected;
-        if (p == null) { Series = new(); Histogram = new(); Markers = new(); Zones = new(); Raise(nameof(Series)); return; }
+        if (p == null) { Series = new(); Markers = new(); Zones = new(); Raise(nameof(Series)); return; }
 
         double time = 1.0;   // 1 ms: feeding speed*time gives counts/ms directly
         var ms = new ModifierSettings(Convert4.ToStruct(p));
         var mod = new Modifier(ms);
-        bool byComponent = !p.Speed.Whole;
 
         double OutSpeedAtInternal(double v, bool horizontal)
         {
@@ -857,59 +743,24 @@ public sealed class AppState : INotifyPropertyChanged
         double zLo = axX.threshold > 0 && !double.IsInfinity(axX.threshold) ? InternalToAxis(axX.threshold) : double.NaN;
         double zHi = axX.capSpeed > 0 && !double.IsInfinity(axX.capSpeed) ? InternalToAxis(axX.capSpeed) : double.NaN;
 
-        // live hand-speed histogram, in the same axis units, plus how much of it lands in each band
-        Histogram = new List<CurvePoint>();
-        double flat = double.NaN, capped = double.NaN;
-        var rec = Speeds;
-        if (rec != null && ShowSamples)
-        {
-            const int bins = 64;
-            var counts = new int[bins];
-            // SpeedX, not max(X,Y): the curve on this chart is the X curve, so the share numbers
-            // have to be measured on the same axis or they would quietly disagree with the line.
-            var speeds = rec.Snapshot().Select(s => InternalToAxis(byComponent ? s.SpeedX : s.SpeedWhole)).ToList();
-            foreach (var axis in speeds)
-            {
-                if (axis <= 0 || axis > maxAxis) continue;
-                counts[Math.Min((int)(axis / maxAxis * bins), bins - 1)]++;
-            }
-            int peak = counts.Max();
-            if (peak > 0)
-                for (int i = 0; i < bins; i++)
-                    if (counts[i] > 0) Histogram.Add(new CurvePoint(maxAxis * (i + 0.5) / bins, (double)counts[i] / peak));
-
-            int seen = speeds.Count(v => v > 0 && v <= maxAxis);
-            if (seen > 0)
-            {
-                flat = 100.0 * speeds.Count(v => v > 0 && v < zLo) / seen;
-                capped = double.IsNaN(zHi) ? 0 : 100.0 * speeds.Count(v => v >= zHi && v <= maxAxis) / seen;
-            }
-        }
-
-        // The bands belong to the curve, not to the samples: they are drawn even before he moves,
-        // only the percentages need data. Hiding the bands until then would hide the main point.
+        // The bands come from the curve alone: below the X threshold the multiplier is exactly
+        // 1.0 however fast the hand moves, above the X cap it stops rising.
         Zones = new List<ChartZone>();
         if (!double.IsNaN(zLo))
         {
             double top = double.IsNaN(zHi) ? maxAxis : zHi;
-            Zones.Add(new ChartZone(0, zLo, "不加速", flat, ZoneTint(0x1E)));
-            Zones.Add(new ChartZone(zLo, top, "加速中", double.IsNaN(flat) ? double.NaN : Math.Max(0, 100 - flat - capped),
-                                    ZoneTint(0x30)));
-            if (!double.IsNaN(zHi)) Zones.Add(new ChartZone(zHi, maxAxis, "已封顶", capped, ZoneTint(0x42)));
+            Zones.Add(new ChartZone(0, zLo, "不加速", ZoneTint(0x1E)));
+            Zones.Add(new ChartZone(zLo, top, "加速中", ZoneTint(0x30)));
+            if (!double.IsNaN(zHi)) Zones.Add(new ChartZone(zHi, maxAxis, "已封顶", ZoneTint(0x42)));
         }
 
-        Telemetry = DescribeSpeeds();
         lastCurveHash = ConfigHash.OfDoc(doc);
-        lastSampleWindows = Speeds?.Windows ?? 0;
 
         Raise(nameof(Series));
-        Raise(nameof(Histogram));
         Raise(nameof(Zones));
-        Raise(nameof(Markers));
         Raise(nameof(Markers));
         Raise(nameof(XAxisLabel));
         Raise(nameof(YAxisLabel));
-        Raise(nameof(Telemetry));
     }
 
 

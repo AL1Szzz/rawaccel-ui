@@ -6,9 +6,9 @@ using RaCore.Model;
 namespace RaProbe;
 
 /// <summary>
-/// Verification harness for task #1: does our C# layout match the driver's C++ layout,
-/// and does the live driver agree with D:\RawAccel\settings.json?
-/// Read-only: this program never writes to the driver.
+/// Verification harness: does our C# layout match the driver's C++ layout, and does the live
+/// driver agree with the official settings.json? Read-only unless --apply-settings is given.
+/// Also the command-line face of "which curve is running right now" (--curve-name).
 /// </summary>
 internal static class Program
 {
@@ -26,12 +26,6 @@ internal static class Program
             return;
         }
 
-        if (args.Contains("--rawinput-probe"))
-        {
-            RawInputProbe.Run(args);
-            return;
-        }
-
         // "Which curve is in the driver right now, in words." The read-only counterpart of the UI's
         // curve list, printed by name rather than by hex - the hex codes were the complaint.
         if (args.Contains("--curve-name"))
@@ -46,17 +40,9 @@ internal static class Program
                 Console.WriteLine(hit != null
                     ? $"驱动里跑的是「{hit.Name}」：{hit.Summary}"
                     : $"驱动里是一份没存过的配置（{sha}）：{Presets.Describe(live.Profiles[0])}");
-                // the sha is in this line on purpose: field/spray-bursts.mjs maps it onto the
-                // column labels of a demo report, and a report with only hex is what he objected to
-                foreach (var p in saved) Console.WriteLine($"  可切换：{p.Name} [{p.Sha}]　{p.Summary}");
+            foreach (var p in saved) Console.WriteLine($"  可切换：{p.Name} [{p.Sha}]　{p.Summary}");
             }
             catch (Exception e) { Console.WriteLine("读驱动失败：" + e.Message); Environment.Exit(1); }
-            return;
-        }
-
-        if (args.Contains("--poll-jitter"))
-        {
-            Environment.Exit(PollJitter.Run(args));
             return;
         }
 
@@ -329,65 +315,9 @@ internal static class Program
                 Console.WriteLine($"     {d.Id}  {(d.Id == d.Id.ToUpperInvariant() ? "OK" : "*** not upper ***")}");
         }
 
-        if (args.Contains("--simulate-advice"))
-        {
-            Console.WriteLine("\n== 11. simulate a player, then check the advice engine ==");
-            var prof = modifiers[0].prof;
-            var ax = CurveAnalysis.Analyze(prof, true);
-            var ay = CurveAnalysis.Analyze(prof, false);
-            Console.WriteLine($"   X thresh={ax.Threshold:0.00} capAt={ax.CapSpeed:0.00} peak={ax.PeakGain:0.00}   " +
-                              $"Y thresh={ay.Threshold:0.00} capAt={ay.CapSpeed:0.00} peak={ay.PeakGain:0.00}");
-
-            double sens = 1.0;
-            var mod = new Modifier(new ModifierSettings(prof));
-
-            // the simulated player sizes every flick as if the stream were NOT accelerated
-            var sim = new List<Trial>();
-            foreach (double deg in new double[] { 3, 5, 8, 12, 18, 25, 35, 50, 70, 100 })
-            for (int rep = 0; rep < 4; rep++)
-            {
-                double need = Cs2.CountsForDegrees(deg, sens);
-                double duration = 90 + deg * 1.6;
-                double handSpeed = need / duration;              // counts/ms
-                double t = 1.0;
-                var sp = new SpeedProcessor(); sp.Init(prof.speed_processor_args);
-                var o = mod.Modify(new vec2d { x = handSpeed * t, y = 0 }, sp, 1, t);
-                double ratio = (o.x / t) / Math.Max(handSpeed, 1e-9);
-                double delivered = need * ratio;
-
-                sim.Add(new Trial
-                {
-                    Degrees = deg,
-                    DistancePx = need,
-                    AngleRad = Random.Shared.NextDouble() * 2 * Math.PI,
-                    PeakSpeed = handSpeed * 1.9,
-                    RadialPct = (delivered - need) / need * 100.0,
-                    RadialPx = delivered - need,
-                    TangentialPx = Random.Shared.NextDouble() * 6 - 3,
-                    ErrorPx = Math.Abs(delivered - need),
-                    Hit = Math.Abs(delivered - need) <= 26,
-                    StartMs = 0, EndMs = duration,
-                });
-            }
-
-            Console.WriteLine("   simulated flicks (hand sized for a neutral stream):");
-            foreach (var g in sim.GroupBy(x => x.Degrees).OrderBy(g => g.Key))
-            {
-                var t0 = g.First();
-                Console.WriteLine($"     {g.Key,5:0}deg  need {t0.DistancePx,7:0}px  peak {t0.PeakSpeed,5:0.0}c/ms  " +
-                                  $"radial {t0.RadialPct,+6:0.0}%  hit {(g.Count(x => x.Hit) * 100.0 / g.Count()):0}%");
-            }
-
-            Console.WriteLine("\n   summary of the simulated round (description only, no advice engine):");
-            var simStats = RoundStats.Compute(sim, 26, sim.Average(x => x.DistancePx));
-            Console.WriteLine($"     n={simStats.Count}  hit {simStats.HitRate:0.0}%  radial median {simStats.RadialMedian:+0.0;-0.0}%  MAE {simStats.RadialMae:0.0}%  sd {simStats.RadialSd:0.0}%");
-            Console.WriteLine($"     over/on/under = {simStats.OvershootCount:0}/{simStats.OnTargetCount:0}/{simStats.UndershootCount:0}");
-            foreach (var q in simStats.Quality) Console.WriteLine("     flag: " + q);
-        }
-
         if (args.Contains("--display"))
         {
-            Console.WriteLine("\n== 12. display modes (read only, nothing is changed) ==");
+            Console.WriteLine("\n== 11. display modes (read only, nothing is changed) ==");
             var cur = Display.Current();
             var modes = Display.AvailableModes();
             Console.WriteLine($"   current = {cur.Width}x{cur.Height} @ {cur.Refresh}Hz, {cur.Bits}bpp");
@@ -398,76 +328,12 @@ internal static class Program
             Console.WriteLine($"   implausible entries: {odd.Count}");
         }
 
-        if (args.Contains("--sample-log"))
-        {
-            Console.WriteLine("\n== 13. write a sample round log (synthetic trials) ==");
-            var prof = modifiers[0].prof;
-            var mod = new Modifier(new ModifierSettings(prof));
-            var t = new List<Trial>();
-            var rnd = new Random(7);
-            foreach (double deg in new double[] { 4, 8, 15, 25, 40, 60 })
-            for (int rep = 0; rep < 5; rep++)
-            {
-                double need = Cs2.CountsForDegrees(deg, 1.5) * 1.25;
-                double dur = 90 + deg * 1.6;
-                double hand = need / dur / 1.25;
-                var sp = new SpeedProcessor(); sp.Init(prof.speed_processor_args);
-                var o = mod.Modify(new vec2d { x = hand, y = 0 }, sp, 1, 1.0);
-                double ratio = o.x / Math.Max(hand, 1e-9);
-                double radial = (ratio - 1) * need + (rnd.NextDouble() - 0.5) * 22;
-                t.Add(new Trial
-                {
-                    Degrees = deg, DistancePx = need, AngleRad = rnd.NextDouble() * 6.28,
-                    StartMs = 0, EndMs = dur, PeakSpeed = hand * 1.9,
-                    RadialPx = radial, RadialPct = radial / need * 100,
-                    TangentialPx = (rnd.NextDouble() - 0.5) * 14,
-                    ErrorPx = Math.Abs(radial), Hit = Math.Abs(radial) <= 26,
-                });
-            }
-
-            var path = @"C:\temp\sample-round.log";
-            var roundId = TestLog.NewRoundId();
-            TestLog.Write(path, new RoundData
-            {
-                RoundId = roundId,
-                When = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                DriverVersion = "driver v1.7.0 · connected",
-                ProfileName = "default",
-                ConfigSha = ConfigHash.Of(prof),
-                ConfigSource = "driver (synthetic trials for format checking)",
-                ProfileJson = RaCore.Model.Json.Serialize(RaCore.Model.Convert4.ReadBlob(blob)),
-                Sensitivity = 1.5, MouseDpi = 600, PollRate = 2000,
-                TargetDistancePx = 420, RadiusPx = 26, TargetCount = 3, Seed = 1234,
-                Direction = "全向", Resolution = "3440x1440@180",
-                Profile = prof, Trials = t,
-                OutputSpeed = (4.4, 9.8, 18.2, 27.5),
-                TelemetryNote = "SYNTHETIC ROUND: the trials were generated from the curve, not thrown by a human",
-            });
-            Console.WriteLine("   wrote " + path + " (" + new FileInfo(path).Length + " bytes)");
-            Console.WriteLine("   read back: " + (TestLog.ReadSummary(path)?.Trials ?? -1) + " trials, sha " +
-                              (TestLog.ReadSummary(path)?.ConfigSha ?? "?"));
-            Console.WriteLine();
-            foreach (var line in File.ReadAllLines(path)) Console.WriteLine("   | " + line);
-        }
-
-        if (args.Contains("--recorder-test") || args.Contains("--replay-log"))
-        {
-            Console.WriteLine("\n== 14. superseded: use --selftest (assertion based, no printing-only checks) ==");
-            Console.WriteLine("   offline recorder/layout/patch/log assertions now live in SelfTests.Run()");
-            Console.WriteLine("   exit code is the verdict: 0 pass, 1 fail");
-        }
-
         Console.WriteLine("\n(done)");
     }
 
     static double D(string s) => double.TryParse(s, System.Globalization.NumberStyles.Float,
         System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
 
-    static double Pct(List<Trial> t, double p)
-    {
-        var a = t.Select(x => x.PeakSpeed).OrderBy(x => x).ToList();
-        return a.Count == 0 ? 0 : a[Math.Clamp((int)(p * (a.Count - 1)), 0, a.Count - 1)];
-    }
     /// <summary>
     /// One mouse packet at his 2000 Hz polling rate. Every table printed here assumes it,
     /// so it is named once instead of being restated in a string that can go stale.

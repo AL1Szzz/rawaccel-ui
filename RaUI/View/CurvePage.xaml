@@ -35,8 +35,6 @@
                                      VerticalAlignment="Center" Checked="OnKind"/>
                         <RadioButton x:Name="RbGain" Content="增益" Margin="0,0,14,6"
                                      VerticalAlignment="Center" Checked="OnKind"/>
-                        <CheckBox x:Name="ChkSamples" Content="实时手速" Margin="0,0,14,6" VerticalAlignment="Center"
-                                  Click="OnSamples" ToolTip="用 WM_INPUT 采样你真实的手速分布，画在曲线底部"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,14,6">
                             <TextBlock Text="图表 DPI" VerticalAlignment="Center" Foreground="{StaticResource TextTertiaryBrush}"/>
                             <TextBox x:Name="TxtChartDpi" Width="64" Margin="8,0,0,0" LostFocus="OnChartScale"/>
@@ -49,8 +47,8 @@
 
                     <c:CurveChart x:Name="Chart" Grid.Row="1" Margin="0,4,0,4"/>
 
-                    <TextBlock Grid.Row="2" Style="{StaticResource SubtleTextStyle}" TextWrapping="NoWrap"
-                               Text="实时手速仅供参考，按自己的手感调整。"/>
+                    <TextBlock x:Name="CurveMeaning" Grid.Row="2" Style="{StaticResource SubtleTextStyle}"
+                               TextWrapping="Wrap"/>
                 </Grid>
             </Border>
 

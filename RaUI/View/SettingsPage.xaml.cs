@@ -16,7 +16,7 @@ public partial class SettingsPage : UserControl
     {
         TxtDriver.Text = App.State.DriverInfo;
         TxtPath.Text = "设置文件：" + App.State.SettingsPath +
-                       "\n数据目录（日志/审计/偏好）：" + RaCore.AppData.Location +
+                       "\n数据目录（成绩历史/我的方案/偏好）：" + RaCore.AppData.Location +
                        (UiPrefs.LastError is { Length: > 0 } err ? "\n偏好：" + err : "");
 
         var legacy = Autostart.LegacyWriterShortcut();
@@ -89,7 +89,7 @@ public partial class SettingsPage : UserControl
         string want = $"{pr.FullscreenWidth}×{pr.FullscreenHeight}" +
                       (pr.FullscreenRefresh > 0 ? $" @ {pr.FullscreenRefresh}Hz" : "");
         ModeWarn.Text = offered
-            ? $"测试将切到 {want}，关闭测试窗口后自动还原；还原失败会在本轮日志里写出来。"
+            ? $"测试将切到 {want}，关闭测试窗口后自动还原；还原失败会直接写在下面的状态里。"
             : $"系统当前没有提供 {want} 这个模式：测试会用当前分辨率跑（窗口里也会写明）。";
     }
 

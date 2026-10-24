@@ -27,15 +27,11 @@ public partial class CurvePage : UserControl
 
         TxtChartDpi.Text = AppState.Prefs.ChartDpi.ToString("0");
         TxtChartPoll.Text = AppState.Prefs.ChartPollRate.ToString();
-        ChkSamples.IsChecked = AppState.Prefs.ShowSamples;
-        App.State.ShowSamples = AppState.Prefs.ShowSamples;
         App.State.ChartDpi = AppState.Prefs.ChartDpi;
         App.State.ChartPollRate = AppState.Prefs.ChartPollRate;
 
         Chart.SetBinding(Controls.CurveChart.SeriesProperty,
             new System.Windows.Data.Binding(nameof(AppState.Series)) { Source = App.State });
-        Chart.SetBinding(Controls.CurveChart.HistogramProperty,
-            new System.Windows.Data.Binding(nameof(AppState.Histogram)) { Source = App.State });
         Chart.SetBinding(Controls.CurveChart.MarkersProperty,
             new System.Windows.Data.Binding(nameof(AppState.Markers)) { Source = App.State });
         Chart.SetBinding(Controls.CurveChart.ZonesProperty,
@@ -53,10 +49,13 @@ public partial class CurvePage : UserControl
             if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.CanWrite) or nameof(AppState.Busy))
                 Dispatcher.Invoke(UpdateEditingState);
             if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.Series))
+            {
                 Dispatcher.Invoke(RefreshValues);
+                Dispatcher.Invoke(RefreshMeaning);
+            }
         };
 
-        Loaded += (_, _) => { UpdateEditingState(); RefreshValues(); };
+        Loaded += (_, _) => { UpdateEditingState(); RefreshValues(); RefreshMeaning(); };
     }
 
     void UpdateEditingState()
@@ -282,11 +281,11 @@ public partial class CurvePage : UserControl
 
     static bool HasFocus(Control c) => c.IsKeyboardFocused || c.IsKeyboardFocusWithin;
 
-    void OnSamples(object sender, RoutedEventArgs e)
+    /// <summary>The same curve in units you can feel, so the chart is not just a shape.</summary>
+    void RefreshMeaning()
     {
-        App.State.ShowSamples = ChkSamples.IsChecked == true;
-        AppState.Prefs.ShowSamples = App.State.ShowSamples;
-        AppState.SavePrefs();
+        var p = App.State.SelectedProfile;
+        CurveMeaning.Text = p == null ? "" : App.State.PhysicsReadout(p);
     }
 
     void OnKind(object sender, RoutedEventArgs e)

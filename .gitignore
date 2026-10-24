@@ -4,5 +4,3 @@ release*/
 app/
 logs/
 *.user
-field/node_modules/
-field/inbox/

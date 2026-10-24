@@ -10,30 +10,25 @@ using RaCore;
 namespace RaUI.View;
 
 /// <summary>
-/// Borderless fullscreen aim test. Many balls sit on screen at once and are clicked one after
-/// another; a clicked ball jumps to a fresh spot, so the run is continuous and never re-centres
-/// the pointer. Each click is scored as one flick: from wherever the pointer actually was after
-/// the previous click, to the ball that was under (or nearest to) the cursor.
-/// Distances are physical desktop pixels. This is a desktop pointer test; it does not simulate
-/// a CS2 camera, and the recorded speeds are post-driver output, not hand speed.
+/// Borderless fullscreen ball practice. Many balls sit on screen at once and are clicked one
+/// after another; a clicked ball jumps to a fresh spot, so the run is continuous and never
+/// re-centres the pointer. Each click is scored on its own: from wherever the pointer actually
+/// was after the previous click, to the ball that was under it.
+/// Distances are physical desktop pixels - this is a pointer test, it does not model a game camera.
 /// </summary>
 public partial class FlickWindow : Window
 {
     public sealed class Config
     {
-        public double AngleDeg = 15;              // legacy: only used to derive DistancePx when that is 0
-        public double DistancePx = 0;             // physical px from pointer to ball centre
+        public double DistancePx = 420;             // physical px from pointer to ball centre
         public double RadiusPx = 26;
         public int TargetCount = 1;               // balls alive on screen at once
         public TestMode Mode = TestMode.Balls;    // clear a number of balls, or clear as many as possible in time
         public int Trials = 20;                   // Balls mode: how many balls must be CLEARED
         public double Seconds = 60;               // Timed mode: how long the round runs
-        public double Sensitivity = 1.5;
-        public double Dpi = 600;
         public int DirectionMode;                 // 0 any 1 right 2 left 3 down 4 up 5 horizontal
         public int Seed = 20261020;
         public Display.Mode? Resolution;          // null = keep the current desktop mode
-        public string DeviceId = "";              // restrict telemetry to this device
 
         // crosshair, in physical pixels
         public double CrossArm = 9;
@@ -43,9 +38,6 @@ public partial class FlickWindow : Window
 
         /// <summary>Test hook: pretend the pointer is here (physical px) so the layout can be rendered offscreen.</summary>
         public (double x, double y)? DebugCursorPx;
-
-        public double EffectiveDistancePx => DistancePx > 0 ? DistancePx
-            : Cs2.CountsForDegrees(AngleDeg, Sensitivity);
     }
 
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
@@ -66,8 +58,6 @@ public partial class FlickWindow : Window
     List<BallTarget> balls = new();
     double flickOriginX, flickOriginY, flickStartMs;
     int nextBallId = 1, respawnStuck;
-    long speedMark;
-    long wmAtStart, fedAtStart, undecodedAtStart, absoluteAtStart, zeroDeltaAtStart, mismatchAtStart;
     double sessionStartedMs;
     bool running;
     bool countdownCancelled;
@@ -75,15 +65,13 @@ public partial class FlickWindow : Window
     bool changingMode;
     string endReason = "";
 
-    public double PxPerCount => 1.0;        // kept for compatibility; the test no longer converts counts
-    public bool Calibrated => false;
     public string UsedResolution { get; private set; } = "";
     public string DisplayWarning { get; private set; } = "";
+    /// <summary>Something about the setup the player should know (e.g. the screen was too small).</summary>
+    public string RoundNotice { get; private set; } = "";
     public string EndReason => endReason;
     public SessionRule Rule => rule;
     public bool Completed => rule.Finished;
-    public List<MouseSample> RecordedSamples { get; } = new();
-    public string TelemetryNote { get; private set; } = "";
 
     public event Action<Trial>? TrialDone;
     public event Action<List<Trial>>? SessionDone;
@@ -229,10 +217,6 @@ public partial class FlickWindow : Window
 
     async Task StartCountdown()
     {
-        var mon = App.State.Monitor;
-        if (mon != null)
-            mon.SelectedDeviceName = string.IsNullOrEmpty(cfg.DeviceId) ? null : DeviceEnum.CanonicalId(cfg.DeviceId);
-
         for (int i = 3; i > 0 && !countdownCancelled; i--)
         {
             string goal = rule.Mode == TestMode.Balls
@@ -243,24 +227,11 @@ public partial class FlickWindow : Window
         }
         if (countdownCancelled) return;
 
-        TelemetryNote = mon == null ? "no WM_INPUT monitor: speeds recorded as n/a"
-                    : !mon.Active ? "WM_INPUT registration failed: speeds are n/a"
-                    : !string.IsNullOrEmpty(cfg.DeviceId) ? $"telemetry filtered to {cfg.DeviceId}"
-                    : "telemetry mixes every mouse Raw Input reports (no device restriction)";
-
         running = true;
         sessionStartedMs = clock.Elapsed.TotalMilliseconds;
         rule.ElapsedMs = 0;
-        wmAtStart = mon?.WmInputSeen ?? 0;
-        fedAtStart = mon?.PacketsFed ?? 0;
-        undecodedAtStart = mon?.Undecoded ?? 0;
-        absoluteAtStart = mon?.AbsoluteSeen ?? 0;
-        zeroDeltaAtStart = mon?.ZeroDeltaSeen ?? 0;
-        mismatchAtStart = mon?.DeviceMismatch ?? 0;
         BannerText.Text = rule.Hud();
         hud.Start();
-        var rec = App.State.Speeds;
-        speedMark = rec?.Mark() ?? 0;
         SpawnInitial();
         UpdateCross();
     }
@@ -270,7 +241,7 @@ public partial class FlickWindow : Window
     {
         int want = Math.Max(1, cfg.TargetCount);
         var (cx, cy) = CursorPx();
-        balls = TargetLayout.Place(cx, cy, screenW, screenH, cfg.EffectiveDistancePx, cfg.RadiusPx,
+        balls = TargetLayout.Place(cx, cy, screenW, screenH, cfg.DistancePx, cfg.RadiusPx,
                                    want, cfg.Seed, cfg.DirectionMode);
         for (int i = 0; i < balls.Count; i++) balls[i] = balls[i] with { Id = i + 1 };
         nextBallId = balls.Count + 1;
@@ -282,7 +253,7 @@ public partial class FlickWindow : Window
             return;
         }
         if (balls.Count < want)
-            TelemetryNote += $" | only {balls.Count}/{want} balls fitted on this screen";
+            RoundNotice = $"屏幕只放不下 {want} 个球里的 {balls.Count} 个：把距离或半径调小一点";
 
         flickOriginX = cx; flickOriginY = cy;
         flickStartMs = clock.Elapsed.TotalMilliseconds;
@@ -297,7 +268,7 @@ public partial class FlickWindow : Window
     void Respawn(int index, double fromX, double fromY)
     {
         var others = balls.Where((_, i) => i != index).ToList();
-        double want = cfg.EffectiveDistancePx;
+        double want = cfg.DistancePx;
         foreach (double k in new[] { 1.0, 0.8, 0.62, 0.45, 0.3 })
         {
             var placed = TargetLayout.Place(fromX, fromY, screenW, screenH, want * k, cfg.RadiusPx, 1,
@@ -307,8 +278,9 @@ public partial class FlickWindow : Window
             DrawBalls();
             return;
         }
-        respawnStuck++;     // left where it was; the log says so instead of hiding it
-        TelemetryNote += $" | {respawnStuck} ball(s) could not be re-placed on screen and stayed put";
+        // left where it was rather than end the round, and the banner says so instead of hiding it
+        respawnStuck++;
+        RoundNotice = $"{respawnStuck} 个球在屏幕上找不到新位置，留在原地继续";
     }
 
     void DrawBalls()
@@ -344,64 +316,26 @@ public partial class FlickWindow : Window
         if (idx < 0) return;
         var tgt = balls[idx];
 
-        // the flick being measured runs from where the pointer actually was when the last ball
-        // was clicked (or from the round start), so distance and direction are the real ones
+        // the flick runs from where the pointer actually was when the last ball was clicked
+        // (or from the round start), so the distance and direction are the real ones
         double aimDistance = Math.Sqrt(Math.Pow(tgt.X - flickOriginX, 2) + Math.Pow(tgt.Y - flickOriginY, 2));
-        var (radial, tang, error, radialPct) = TargetLayout.Score(cpx, cpy, flickOriginX, flickOriginY, tgt.X, tgt.Y);
-
-        var rec = App.State.Speeds;
-        double peak = 0; int samples = 0; bool trunc = false;
-        List<MouseSample> win = new();
-        if (rec != null)
-        {
-            rec.Flush();
-            trunc = rec.IsTruncated(speedMark);
-            win = rec.Since(speedMark);
-            RecordedSamples.AddRange(win);
-            samples = win.Count;
-            foreach (var sm in win) peak = Math.Max(peak, sm.SpeedWhole);
-            speedMark = rec.Mark();
-        }
 
         var trial = new Trial
         {
-            Degrees = cfg.AngleDeg,
             DistancePx = aimDistance,
-            AngleRad = Math.Atan2(tgt.Y - flickOriginY, tgt.X - flickOriginX),
             StartMs = flickStartMs,
             EndMs = clock.Elapsed.TotalMilliseconds,
             OriginX = flickOriginX, OriginY = flickOriginY,
             TargetX = tgt.X, TargetY = tgt.Y,
             ClickX = cpx, ClickY = cpy,
-            RadialPx = radial, TangentialPx = tang, RadialPct = radialPct, ErrorPx = error,
-            Hit = underCursor && error <= cfg.RadiusPx,
-            PeakSpeed = peak,
+            ErrorPx = TargetLayout.Error(cpx, cpy, tgt.X, tgt.Y),
+            Hit = underCursor,
             TargetId = tgt.Id, VisibleTargets = balls.Count,
-            SampleCount = samples, TelemetryTruncated = trunc,
-            BallUnderCursor = underCursor,
-            SpeedStartSeq = speedMark,
         };
         done.Add(trial);
         rule.Clicks++;
         if (trial.Hit) rule.Hits++;
         rule.ElapsedMs = clock.Elapsed.TotalMilliseconds - sessionStartedMs;
-
-        // open-loop view of the same flick: where the FIRST movement actually stopped
-        var prim = OpenLoop.Analyze(win, flickOriginX, flickOriginY, tgt.X, tgt.Y, cpx, cpy, cfg.RadiusPx);
-        if (prim is { } pm)
-        {
-            trial.HasPrimary = true;
-            trial.PrimaryRadialPx = pm.RadialPx; trial.PrimaryTangentialPx = pm.TangentialPx;
-            trial.PrimaryRadialPct = pm.RadialPct; trial.PrimaryErrorPx = pm.ErrorPx;
-            trial.PrimaryTimeMs = pm.TimeMs; trial.PrimaryPeakCms = pm.PeakCms;
-            trial.Corrected = pm.Corrected; trial.PrimaryScaled = pm.Scaled;
-            trial.PrimaryScaleK = pm.ScaleK;
-            trial.MaxExtentPct = pm.MaxExtentPct; trial.Overshot = pm.Overshot;
-            trial.TimeToTargetMs = pm.TimeToTargetMs; trial.OnsetMs = pm.OnsetMs;
-            trial.LateralPathPx = pm.LateralPathPx; trial.ArcRatio = pm.ArcRatio;
-            trial.PathReversals = pm.Reversals; trial.PerpPeakPx = pm.PerpPeakPx; trial.AsymCoef = pm.AsymCoef;
-            trial.AsymNum = pm.AsymNum; trial.AsymDen = pm.AsymDen;
-        }
         TrialDone?.Invoke(trial);
 
         // every click starts the next flick, whether it landed or not
@@ -429,25 +363,11 @@ public partial class FlickWindow : Window
         running = false;
         follow.Stop();
         hud.Stop();
-        App.State.Speeds?.Flush();
-        var mon = App.State.Monitor;
-        if (mon != null)
-        {
-            long wm = mon.WmInputSeen - wmAtStart, fed = mon.PacketsFed - fedAtStart;
-            string where = fed > 0 ? ""
-                : wm == 0 ? " => 一条 WM_INPUT 都没到这个窗口（注册/sink 问题，或跑的是旧版程序）"
-                : mon.Undecoded - undecodedAtStart == wm ? " => 全都解码失败（包结构/偏移不对）"
-                : mon.AbsoluteSeen - absoluteAtStart > 0 && fed == 0 ? " => 被当成绝对指针丢掉了（usFlags 判断错）"
-                : mon.DeviceMismatch - mismatchAtStart > 0 ? " => 被设备过滤器丢掉了（设备 id 对不上）"
-                : " => 全是零位移包（光标没动或系统合并掉了）";
-            TelemetryNote += $" | during round: WM_INPUT +{wm}, fed +{fed}, undecoded +{mon.Undecoded - undecodedAtStart}," +
-                             $" absolute +{mon.AbsoluteSeen - absoluteAtStart}, zeroDelta +{mon.ZeroDeltaSeen - zeroDeltaAtStart}," +
-                             $" deviceMismatch +{mon.DeviceMismatch - mismatchAtStart}{where}";
-        }
         if (!sessionReported)
         {
             sessionReported = true;
-            BannerText.Text = rule.Clicks > 0 ? $"{rule.Score()} · 正在还原…" : "本轮没有有效点击，正在还原…";
+            string note = RoundNotice.Length > 0 ? "（" + RoundNotice + "）" : "";
+            BannerText.Text = rule.Clicks > 0 ? $"{rule.Score()} · 正在还原…{note}" : "本轮没有有效点击，正在还原…";
             SessionDone?.Invoke(new List<Trial>(done));
         }
         RestoreDisplay();

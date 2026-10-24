@@ -51,7 +51,7 @@
                     <CheckBox x:Name="ChkStartHidden" Content="开机自启时直接收进托盘，不弹窗口" Margin="0,0,0,8" Click="OnTrayChanged"/>
                     <TextBlock x:Name="TxtTrayState" Style="{StaticResource SubtleTextStyle}" TextWrapping="Wrap" Margin="0,0,0,6"/>
                     <TextBlock Style="{StaticResource SubtleTextStyle}" TextWrapping="Wrap"
-                               Text="托盘图标：左键=显示/隐藏窗口，右键=菜单（写入驱动、打开日志目录、退出）。驱动不保存设置：开机后如果不写入，鼠标就是原始输入（不加速）。"/>
+                               Text="托盘图标：左键=显示/隐藏窗口，右键=菜单（写入驱动、打开数据目录、退出）。驱动不保存设置：开机后如果不写入，鼠标就是原始输入（不加速）。"/>
                 </StackPanel>
             </Border>
 

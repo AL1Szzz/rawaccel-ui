@@ -3,7 +3,7 @@ chcp 65001 >nul
 rem What curve is the driver actually running right now? Read-only, never writes.
 rem The curve name and description come from RaProbe itself (UTF-8), so this file
 rem stays ASCII-only and just switches the console codepage for the output.
-rem Switching curves happens in the app: RaUI, first page, top row.
+rem Switching curves happens in the app: RaUI, the "plans" page (last one but one).
 cd /d "%~dp0"
 echo.
 app\RaProbe.exe --curve-name

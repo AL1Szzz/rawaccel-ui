@@ -39,7 +39,7 @@ public partial class MainWindow : Window
                 // Windows 10: no Mica, keep the solid dark surface
                 ((Border)Content).Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x1F));
             }
-            if (!App.Headless) App.State.AttachMonitor(this);
+            if (!App.Headless) App.State.StartAutoRefresh();
         };
     }
 

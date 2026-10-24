@@ -1,29 +1,10 @@
 @echo off
 rem One-command publish. Always the same output folder: app\RaUI.exe (no release-2/3/4 dirs).
-rem Logs, presets, patch audits and UI prefs live in %LOCALAPPDATA%\RawAccelUI, so a rebuild
+rem Presets, score history and UI prefs live in %LOCALAPPDATA%\RawAccelUI, so a rebuild
 rem never loses them.
 rem NOTE: keep this file ASCII-only - cmd.exe reads it in the OEM codepage and UTF-8 Chinese
-rem comments turn into garbage that it then tries to execute. field\check-cmd.mjs enforces this.
+rem comments turn into garbage that it then tries to execute.
 cd /d "%~dp0"
-
-set "NODE=node"
-if exist "%USERPROFILE%\node-v24.21.0-win-x64\node.exe" set "NODE=%USERPROFILE%\node-v24.21.0-win-x64\node.exe"
-rem RAUI_NODE wins when set, so a non-standard node install needs no script edits.
-if defined RAUI_NODE set "NODE=%RAUI_NODE%"
-
-rem ---- gate 1: the double-click launchers in this folder ----
-rem A broken .cmd is invisible until someone double-clicks it mid-test, and the classic ways it
-rem breaks are silent: UTF-8 bytes in the content, or a bare arrow in an echo line (which is a
-rem REDIRECTION and just creates files in the repo instead of failing).
-if exist "field\check-cmd.mjs" (
-  "%NODE%" field\check-cmd.mjs
-  if errorlevel 1 (
-    echo.
-    echo Publish stopped: fix the .cmd findings above first.
-    echo If node is missing on this machine, delete or rename field\check-cmd.mjs to skip the gate.
-    exit /b 1
-  )
-)
 
 dotnet publish RaUI\RaUI.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=none -p:EnableCompressionInSingleFile=true -o app
 if errorlevel 1 (
@@ -39,7 +20,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem ---- gate 2: the offline assertions, run from the binaries that just shipped ----
+rem ---- gate: the offline assertions, run from the binaries that just shipped ----
 rem These never touch the driver, the display or the mouse, so publishing while a game is running
 rem is safe. A build that fails them is not "probably fine".
 echo.
@@ -50,11 +31,15 @@ app\RaProbe.exe --selftest > "%TEMP%\raui-selftest.txt" 2>&1
 set "ST=%ERRORLEVEL%"
 findstr /C:"checks," /C:"FAILED" "%TEMP%\raui-selftest.txt"
 del "%TEMP%\raui-selftest.txt" >nul 2>&1
-if not "%ST%"=="0" echo   SELFTEST FAILED, exit code %ST% - do not use this build until it is green.
+if not "%ST%"=="0" (
+  echo   SELFTEST FAILED, exit code %ST% - do not use this build until it is green.
+  exit /b 1
+)
 
 echo.
 echo Done: app\RaUI.exe  +  app\RaProbe.exe
 echo   offline checks:  app\RaProbe.exe --selftest
+echo   which curve:     app\RaProbe.exe --curve-name
 echo   tray check:      app\RaUI.exe --dump-tray
 echo   icon check:      app\RaUI.exe --dump-ico RaUI\raui.ico
 echo   ui render:       app\RaUI.exe --dump-ui (offscreen, no focus change)

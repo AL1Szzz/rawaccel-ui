@@ -158,7 +158,8 @@ public sealed class TrayIcon : IDisposable
 
     string Tip()
     {
-        // same hash the round logs print, so "图标上写的 sha" and "日志里的 sha" are comparable
+        // the same hash the plan list and the score history print, so the tooltip, the button and
+        // the CSV always name one and the same curve
         var p = state.SelectedProfile;
         string sha = p == null ? "无配置文件" : RaCore.ConfigHash.Of(p);
         string dirty = state.IsDirty ? " · 未写入" : "";
@@ -287,15 +288,15 @@ public sealed class TrayIcon : IDisposable
         m.Items.Add(Item("显示 / 隐藏主界面", () => ToggleWindow()));
         m.Items.Add(Item("立即把设置写入驱动", () => _ = state.WriteToDriverAsync()));
         m.Items.Add(new Separator());
-        m.Items.Add(Item("打开日志目录", () =>
+        m.Items.Add(Item("打开数据目录", () =>
         {
             try
             {
-                System.IO.Directory.CreateDirectory(RaCore.AppData.LogDir);
+                System.IO.Directory.CreateDirectory(RaCore.AppData.Root);
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe",
-                    $"\"{RaCore.AppData.LogDir}\"") { UseShellExecute = true });
+                    $"\"{RaCore.AppData.Root}\"") { UseShellExecute = true });
             }
-            catch (Exception e) { state.Status = "打不开日志目录：" + e.Message; }
+            catch (Exception e) { state.Status = "打不开数据目录：" + e.Message; }
         }));
         var chk = new MenuItem { Header = "登录时自动启动", IsCheckable = true, IsChecked = Autostart.IsEnabled };
         chk.Click += (_, _) =>

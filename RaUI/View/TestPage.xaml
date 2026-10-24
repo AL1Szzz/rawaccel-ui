@@ -162,8 +162,8 @@
                                                ToolTip="相同种子和设置会使用相同的小球位置序列。"/>
                                     <TextBox x:Name="TxtSeed" Grid.Row="1" Grid.Column="1" Text="20261020" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
 
-                                    <TextBlock Grid.Row="2" Text="采样设备" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
-                                               ToolTip="只采样所选鼠标的输入，避免其他设备混入。"/>
+                                    <TextBlock Grid.Row="2" Text="记录设备" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                               ToolTip="成绩里记下这只鼠标当前生效的方案；接了不止一只鼠标时才需要区分。"/>
                                     <ComboBox x:Name="CmbDevice" Grid.Row="2" Grid.Column="1" Height="28" Margin="6,3,0,3"/>
 
                                     <TextBlock Grid.Row="3" Text="鼠标 DPI" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
