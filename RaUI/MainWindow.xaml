@@ -85,6 +85,15 @@
                     <ListBoxItem>
                         <StackPanel Orientation="Horizontal">
                             <Canvas Width="18" Height="18" VerticalAlignment="Center">
+                                <Path Data="M2,2 H16 V16 H2 Z M5,2 V7 H13 V2 M5,16 V11 H13 V16"
+                                      Stroke="{StaticResource TextSecondaryBrush}" StrokeThickness="1.3"/>
+                            </Canvas>
+                            <TextBlock Text="我的方案" Margin="11,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem>
+                        <StackPanel Orientation="Horizontal">
+                            <Canvas Width="18" Height="18" VerticalAlignment="Center">
                                 <Path Data="M1,5.5 H17 M1,12.5 H17" Stroke="{StaticResource TextSecondaryBrush}" StrokeThickness="1.3"/>
                                 <Ellipse Canvas.Left="9" Canvas.Top="2.8" Width="5.4" Height="5.4" Fill="{StaticResource CardBrush}"
                                          Stroke="{StaticResource TextSecondaryBrush}" StrokeThickness="1.3"/>
@@ -115,10 +124,9 @@
                     <TextBlock x:Name="StatusText" Grid.Column="2" Margin="18,0,0,0" VerticalAlignment="Center"
                                Foreground="{StaticResource TextTertiaryBrush}" TextTrimming="CharacterEllipsis"/>
 
-                    <StackPanel Grid.Column="3" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                        <Button x:Name="BtnReload" Content="从驱动读取" Click="OnReload" Margin="0,0,8,0"/>
-                        <Button x:Name="BtnSave" Content="保存文件" Click="OnSave"/>
-                        <Button x:Name="BtnWrite" Content="写入驱动" Style="{StaticResource AccentButton}" Margin="8,0,0,0" Click="OnWrite"/>
+                    <StackPanel x:Name="EditorActions" Grid.Column="3" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="BtnReload" Content="读取当前设置" Click="OnReload" Margin="0,0,8,0"/>
+                        <Button x:Name="BtnWrite" Content="应用设置" Style="{StaticResource AccentButton}" Click="OnWrite"/>
                     </StackPanel>
                 </Grid>
             </Border>

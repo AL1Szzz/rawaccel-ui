@@ -1,0 +1,85 @@
+<UserControl x:Class="RaUI.View.PlansPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <StackPanel Margin="4,6,4,16">
+            <TextBlock Text="我的方案" Style="{StaticResource TitleTextStyle}"/>
+            <TextBlock Text="给调好的手感起个名字，保存下来，随时切换。"
+                       Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"/>
+        </StackPanel>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="340"/>
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource Card}" Margin="0,0,12,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,12">
+                        <Button Content="刷新" DockPanel.Dock="Right" Click="OnRefresh"/>
+                        <TextBlock x:Name="Current" Text="当前方案" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" FontWeight="SemiBold"/>
+                    </DockPanel>
+                    <ListBox x:Name="PlanList" Grid.Row="1" SelectionChanged="OnSelect"
+                             Background="Transparent" BorderThickness="0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="4,8" MaxWidth="560">
+                                    <TextBlock Text="{Binding Label}" FontSize="16" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Description}" Margin="0,5,0,0" TextWrapping="Wrap"
+                                               Style="{StaticResource SubtleTextStyle}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="EmptyNote" Grid.Row="1" Text="还没有方案，在右侧保存第一份。"
+                               Visibility="Collapsed" Style="{StaticResource SubtleTextStyle}"/>
+                    <StackPanel Grid.Row="2" Margin="0,12,0,0">
+                        <WrapPanel>
+                            <Button x:Name="Apply" Content="应用选中方案" Style="{StaticResource AccentButton}"
+                                    Click="OnApply" IsEnabled="False" Margin="0,0,8,4"/>
+                            <Button x:Name="Undo" Content="撤回上次应用" Click="OnUndo" IsEnabled="False" Margin="0,0,0,4"/>
+                        </WrapPanel>
+                        <TextBlock Text="应用时鼠标可能短暂停顿。" Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="保存现在的手感" FontSize="15" FontWeight="SemiBold"/>
+                            <TextBlock Text="保存曲线与参数页里正在编辑的参数。" Margin="0,6,0,12"
+                                       TextWrapping="Wrap" Style="{StaticResource SubtleTextStyle}"/>
+                            <TextBlock Text="方案名称" Style="{StaticResource SubtleTextStyle}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="PlanName" Text="我的手感" Margin="0,0,0,12"/>
+                            <Button x:Name="Save" Content="保存为新方案" Click="OnSave"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="管理选中方案" FontSize="15" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="SelectedName" Text="先从左侧选一份方案" Margin="0,6,0,12"
+                                       TextWrapping="Wrap" Style="{StaticResource SubtleTextStyle}"/>
+                            <Button x:Name="Overwrite" Content="用当前参数更新这份方案" Click="OnOverwrite" IsEnabled="False" Margin="0,0,0,8"/>
+                            <Button x:Name="Delete" Content="删除选中方案" Click="OnDelete" IsEnabled="False"/>
+                            <TextBlock x:Name="Notice" Margin="0,12,0,0" TextWrapping="Wrap" Style="{StaticResource SubtleTextStyle}"/>
+                            <WrapPanel x:Name="ConfirmPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                <Button x:Name="Confirm" Content="确认" Click="OnConfirm" Margin="0,0,8,0"/>
+                                <Button Content="取消" Click="OnCancel"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

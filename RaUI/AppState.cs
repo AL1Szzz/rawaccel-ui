@@ -46,6 +46,8 @@ public sealed class AppState : INotifyPropertyChanged
     string driverInfo = "驱动未连接";
     bool driverReachable;
     bool busy;
+    RootDto previousSettings;
+    public bool CanUndoSettings => previousSettings != null && !Busy;
     CurveKind curveKind = CurveKind.Sensitivity;
 
     public event PropertyChangedEventHandler PropertyChanged;
@@ -93,7 +95,7 @@ public sealed class AppState : INotifyPropertyChanged
     public bool Busy
     {
         get => busy;
-        set { busy = value; Raise(); }
+        set { busy = value; Raise(); Raise(nameof(CanUndoSettings)); }
     }
 
     public bool CanWrite => DriverReachable && !Busy;
@@ -400,7 +402,7 @@ public sealed class AppState : INotifyPropertyChanged
 
     public void RefreshAfterExternalEdit() => Raise(nameof(SelectedProfile));
 
-    public void SaveToFile()
+    public bool SaveToFile()
     {
         try
         {
@@ -426,14 +428,22 @@ public sealed class AppState : INotifyPropertyChanged
             }
             catch { /* a failed extra backup must not block saving */ }
 
-            File.WriteAllText(SettingsPath, Json.Serialize(doc));
+            string temp = SettingsPath + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, Json.Serialize(doc));
+                File.Move(temp, SettingsPath, true);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
             saved = doc.DeepCopy();
             Raise(nameof(IsDirty));
-            Status = "已保存 " + Path.GetFileName(SettingsPath) + "（旧版备份为 .bak）";
+            Status = "设置已保存";
+            return true;
         }
         catch (Exception e)
         {
             Status = "保存失败：" + e.Message;
+            return false;
         }
     }
 
@@ -624,46 +634,60 @@ public sealed class AppState : INotifyPropertyChanged
     /// <summary>Writes the whole document to the driver. The driver enforces a 1s throttle.</summary>
     public async Task<bool> WriteToDriverAsync()
     {
-        if (!DriverReachable) { Status = "驱动不可用，无法写入"; return false; }
+        if (Busy) { Status = "请等待上一次应用结束"; return false; }
+        if (!DriverReachable) { Status = "驱动不可用，无法应用"; return false; }
+        var target = doc.DeepCopy(); // Never compare a live editable document after an await.
+        byte[] before = null;
+        bool attempted = false;
         Busy = true;
         Raise(nameof(CanWrite));
-        Status = "写入中…（驱动有 1 秒节流）";
+        Status = "正在应用设置…";
         try
         {
-            var problems = Json.Validate(doc);
+            var problems = Json.Validate(target);
             if (problems.Count > 0)
             {
-                Status = "写入被拦下：" + string.Join("；", problems.Take(6));
+                Status = "参数不能应用：" + string.Join("；", problems.Take(4));
                 return false;
             }
-
-            var before = RaDevice.Read();
-            var blob = Convert4.BuildBlob(doc);
+            before = RaDevice.Read();
+            var blob = Convert4.BuildBlob(target);
+            attempted = true;
             await Task.Run(() => RaDevice.Write(blob));
             await Task.Delay(1200);
             var back = Convert4.ReadBlob(RaDevice.Read());
-            bool same = ConfigHash.OfDoc(back) == ConfigHash.OfDoc(doc);
-            if (!same)
-            {
-                try { await Task.Run(() => RaDevice.Write(before)); Status = "回读与提交不一致，已退回写入前的驱动状态"; }
-                catch (Exception e) { Status = "回读不一致且退回失败：" + e.Message; }
-                return false;
-            }
-            saved = doc.DeepCopy();
-            Raise(nameof(IsDirty));
-            Status = "已写入驱动并回读校验一致（约 1 秒后对所有鼠标生效）";
+            if (!Convert4.BuildBlob(back).AsSpan().SequenceEqual(blob))
+                throw new InvalidOperationException("应用后的设置与提交内容不一致");
+
+            // Driver success and disk success are distinct. A disk failure must not be labelled
+            // as a failed driver write, nor mark the unsaved document as clean.
+            previousSettings = Convert4.ReadBlob(before);
+            Raise(nameof(CanUndoSettings));
+            bool persisted = SaveToFile();
+            if (persisted) Status = "设置已应用并保存";
+            else Status = "设置已应用，但未能保存到文件：" + Status;
+            RefreshLiveSha();
             return true;
-        }
-        catch (System.ComponentModel.Win32Exception e)
-        {
-            Status = e.NativeErrorCode == 5
-                ? "写入被拒绝（错误 5）：驱动句柄权限问题"
-                : "写入失败（Win32 " + e.NativeErrorCode + "）：" + e.Message;
-            return false;
         }
         catch (Exception e)
         {
-            Status = "写入失败：" + e.Message;
+            string reason = e is System.ComponentModel.Win32Exception w && w.NativeErrorCode == 5
+                ? "驱动拒绝访问（错误 5）" : e.Message;
+            if (attempted && before != null)
+            {
+                try
+                {
+                    await Task.Delay(1200);
+                    await Task.Run(() => RaDevice.Write(before));
+                    await Task.Delay(1200);
+                    if (!RaDevice.Read().AsSpan().SequenceEqual(before))
+                        throw new InvalidOperationException("恢复后的回读不一致");
+                    Status = "应用失败，驱动已恢复原设置：" + reason;
+                }
+                catch (Exception restore)
+                { Status = "应用失败，驱动状态未确认：" + reason + "；恢复失败：" + restore.Message; }
+            }
+            else Status = "设置未应用：" + reason;
             return false;
         }
         finally
@@ -734,6 +758,7 @@ public sealed class AppState : INotifyPropertyChanged
     /// </summary>
     public async Task<bool> ApplyPresetAsync(string name)
     {
+        if (Busy) { Status = "请等待上一次应用结束"; return false; }
         var found = ListPresets().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
         if (found == null) { Status = "列表里没有这条曲线：" + name; return false; }
         var prof = RaCore.Presets.TryLoad(found.File);
@@ -756,12 +781,35 @@ public sealed class AppState : INotifyPropertyChanged
             Profiles[idx] = before;
             SelectedProfile = before;
             Touch();
-            Status = $"「{name}」没写成，已退回原来的配置（{ConfigHash.Of(before)}）";
+            // Preserve the write/rollback error; reverting the editor is not proof of driver recovery.
             return false;
         }
-        Status = $"「{name}」已写入并回读一致（{ConfigHash.Of(prof)}）· 鼠标可能卡了一下";
         RefreshLiveSha();
         return true;
+    }
+
+    public async Task<bool> UndoLastSettingsAsync()
+    {
+        if (!CanUndoSettings || !DriverReachable) return false;
+        var restore = previousSettings.DeepCopy();
+        var draft = doc.DeepCopy();
+        ReplaceDocument(restore);
+        bool ok = await WriteToDriverAsync();
+        if (ok)
+        {
+            previousSettings = null;
+            Raise(nameof(CanUndoSettings));
+        }
+        else ReplaceDocument(draft);
+        return ok;
+    }
+
+    void ReplaceDocument(RootDto value)
+    {
+        doc = value.DeepCopy();
+        SyncProfileList();
+        RebuildCurves();
+        Touch();
     }
 
     public void SavePreset(string name)

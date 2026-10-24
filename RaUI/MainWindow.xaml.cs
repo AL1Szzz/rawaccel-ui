@@ -22,6 +22,7 @@ public partial class MainWindow : Window
             new CurvePage(),
             new DevicePage(),
             new TestPage(),
+            new PlansPage(),
             new SettingsPage(),
         };
         Host.Content = pages[0];
@@ -47,15 +48,23 @@ public partial class MainWindow : Window
         var st = App.State;
         DriverText.Text = st.DriverInfo;
         Dot.Fill = st.DriverReachable ? (Brush)FindResource("OkBrush") : (Brush)FindResource("WarningBrush");
-        StatusText.Text = st.IsDirty ? st.Status + "  ·  有未写入的改动" : st.Status;
+        StatusText.Text = st.IsDirty ? st.Status + "  ·  有未保存的设置" : st.Status;
         BtnWrite.IsEnabled = st.CanWrite;
         BtnReload.IsEnabled = st.DriverReachable && !st.Busy;
-        BtnWrite.Content = st.Busy ? "写入中…" : "写入驱动";
+        BtnWrite.Content = st.Busy ? "应用中…" : "应用设置";
+        // Freeze every editing surface during an asynchronous write, not just the button.
+        Host.IsEnabled = !st.Busy;
+        Nav.IsEnabled = !st.Busy;
+        EditorActions.Visibility = Nav.SelectedIndex is 0 or 1 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     void OnNav(object sender, SelectionChangedEventArgs e)
     {
-        if (Host != null && Nav.SelectedIndex >= 0) Host.Content = pages[Nav.SelectedIndex];
+        if (Host != null && pages != null && Nav.SelectedIndex >= 0)
+        {
+            Host.Content = pages[Nav.SelectedIndex];
+            SyncStatus(null);
+        }
     }
 
     /// <summary>Used by --dump-ui to render a specific page offscreen.</summary>
@@ -71,7 +80,6 @@ public partial class MainWindow : Window
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     void OnClose(object s, RoutedEventArgs e) => Close();
 
-    void OnSave(object s, RoutedEventArgs e) => App.State.SaveToFile();
     void OnReload(object s, RoutedEventArgs e) => App.State.ReloadFromDriver();
     async void OnWrite(object s, RoutedEventArgs e) => await App.State.WriteToDriverAsync();
 }

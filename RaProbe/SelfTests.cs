@@ -35,37 +35,35 @@ public static class SelfTests
         Console.WriteLine("\n== C. RoundStats: spread instead of a cancelling mean ==");
         Section("stats", Stats);
 
-        Console.WriteLine("\n== D. AiPatch: whitelist, ranges, staleness ==");
-        Section("patch", Patch);
 
-        Console.WriteLine("\n== E. TestLog: frozen snapshot round trip and comparison ==");
+        Console.WriteLine("\n== D. TestLog: frozen snapshot round trip and comparison ==");
         Section("log", Logging);
 
-        Console.WriteLine("\n== F. Json.Validate: nothing absurd reaches the driver ==");
+        Console.WriteLine("\n== E. Json.Validate: nothing absurd reaches the driver ==");
         Section("validate", Validate);
 
-        Console.WriteLine("\n== G. Raw input decoding, target attribution, respawn geometry ==");
+        Console.WriteLine("\n== F. Raw input decoding, target attribution, respawn geometry ==");
         Section("wire", Wire);
 
-        Console.WriteLine("\n== H. Session rules: clear N balls vs beat the clock ==");
+        Console.WriteLine("\n== G. Session rules: clear N balls vs beat the clock ==");
         Section("rules", Rules);
 
-        Console.WriteLine("\n== I. Open loop: the endpoint of the FIRST movement ==");
+        Console.WriteLine("\n== H. Open loop: the endpoint of the FIRST movement ==");
         Section("openloop", OpenLoopChecks);
 
-        Console.WriteLine("\n== J. Simulated flicks: metrics must recover the injected truth ==");
+        Console.WriteLine("\n== I. Simulated flicks: metrics must recover the injected truth ==");
         Section("simulator", SimulatorChecks);
 
-        Console.WriteLine("\n== K. Device entries through the driver blob and settings.json ==");
+        Console.WriteLine("\n== J. Device entries through the driver blob and settings.json ==");
         Section("devices", DeviceWire);
 
-        Console.WriteLine("\n== L. History groups, noise verdicts, archive round trip ==");
+        Console.WriteLine("\n== K. History groups, noise verdicts, archive round trip ==");
         Section("history", HistoryChecks);
 
-        Console.WriteLine("\n== M. Poll jitter: is the packet stream regular, and what does it cost in gain ==");
+        Console.WriteLine("\n== L. Poll jitter: is the packet stream regular, and what does it cost in gain ==");
         Section("jitter", JitterChecks);
 
-        Console.WriteLine("\n== N. Presets: names, hashes, and which slot the driver actually uses ==");
+        Console.WriteLine("\n== M. Presets: names, hashes, and which slot the driver actually uses ==");
         Section("presets", PresetChecks);
 
         Console.WriteLine();
@@ -293,7 +291,7 @@ public static class SelfTests
         SampleCount = 5, TargetId = 1, VisibleTargets = 3,
     };
 
-    // ---------- D ----------
+    // ---------- shared helpers for the JSON / validation sections ----------
 
     static ProfileDto BaseProfile() => new()
     {
@@ -304,6 +302,7 @@ public static class SelfTests
         OutputDpi = 1000,
     };
 
+    /// <summary>A document with just the baseline profile - what most sections validate against.</summary>
     static RootDto BaseDoc()
     {
         var r = new RootDto();
@@ -311,80 +310,7 @@ public static class SelfTests
         return r;
     }
 
-    static string PatchJson(string round, string sha, string body) =>
-        "{\"kind\":\"raui.tune-patch\",\"schema\":1,\"round\":\"" + round + "\",\"baseConfig\":\"" + sha +
-        "\",\"profile\":\"default\"," + body + "}";
-
-    static void Patch()
-    {
-        var doc = BaseDoc();
-        string sha = ConfigHash.Of(doc.Profiles[0]);
-        const string round = "round-2026-10-20_09-00-00-000";
-
-        var ok = AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"inputOffset\":3.6,\"capY\":1.85}}"), doc, "default", round);
-        Check(ok.Ok && ok.Changes.Count == 2 && Math.Abs(ok.PreviewProfile!.X.InputOffset - 3.6) < 1e-9,
-            "a valid patch parses and previews without touching the document");
-        Check(Math.Abs(doc.Profiles[0].X.InputOffset - 3) < 1e-9, "Parse() left the live document alone");
-
-        var fenced = AiPatch.Parse("```json\n" + PatchJson(round, sha, "\"changes\":{\"x\":{\"acceleration\":0.05}}") + "\n```", doc, "default", round);
-        Check(fenced.Ok, "a fenced block from a chat reply is accepted");
-
-        var prose = AiPatch.Parse("好的，这是方案：\n" + PatchJson(round, sha, "\"changes\":{\"y\":{\"inputOffset\":2.8}}") + "\n祝顺利", doc, "default", round);
-        Check(prose.Ok, "surrounding prose is tolerated as long as one object is present");
-
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"inputOffset\":1e999}}"), doc, "default", round).Ok,
-            "an infinite/absurd number is refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"inputOffset\":-3}}"), doc, "default", round).Ok,
-            "out-of-range values are refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"bounce\":2}}"), doc, "default", round).Ok,
-            "unknown field names are refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"devices\":{}}"), doc, "default", round).Ok,
-            "unknown sections are refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"data\":[1,2]}}"), doc, "default", round).Ok,
-            "raw LUT data arrays are refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"mode\":\"banana\"}}"), doc, "default", round).Ok,
-            "an unknown accel mode is refused");
-        var modeOk = AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"mode\":\"natural\"}}"), doc, "default", round);
-        Check(modeOk.Ok, "a known mode string is accepted" + (modeOk.Ok ? "" : " :: " + string.Join(" | ", modeOk.Errors)));
-        Check(!AiPatch.Parse(PatchJson("round-other", sha, "\"changes\":{\"x\":{\"acceleration\":0.05}}"), doc, "default", round).Ok,
-            "a patch for another round is refused");
-        Check(!AiPatch.Parse(PatchJson(round, "deadbeef0000", "\"changes\":{\"x\":{\"acceleration\":0.05}}"), doc, "default", round).Ok,
-            "a stale baseConfig is refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"acceleration\":0.05}}"), doc, "other", round).Ok,
-            "a patch aimed at a different profile is refused");
-        Check(!AiPatch.Parse("{\"kind\":\"something-else\"}", doc, "default", round).Ok, "a foreign kind is refused");
-        Check(!AiPatch.Parse("{\"kind\":\"raui.tune-patch\",\"schema\":2,\"round\":\"" + round + "\",\"baseConfig\":\"" + sha + "\",\"changes\":{}}", doc, "default", round).Ok,
-            "an unknown schema is refused");
-        Check(!AiPatch.Parse("", doc, "default", round).Ok, "empty input is refused");
-        Check(!AiPatch.Parse("{\"changes\":{}}", doc, "default", round).Ok, "a missing envelope is refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"inputOffset\":3.4}}") + " {\"a\":1}", doc, "default", round).Ok,
-            "two top-level objects are refused");
-        Check(!AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"inputOffset\":\"3.4\"}}"), doc, "default", round).Ok,
-            "a number quoted as a string is refused");
-
-        // the effect preview must describe the real curve, not just echo the number
-        var eff = AiPatch.Parse(PatchJson(round, sha, "\"changes\":{\"x\":{\"inputOffset\":6}}"), doc, "default", round);
-        Check(eff.Ok && eff.Warnings.Any(w => w.Contains("起加速")), "preview states the new activation point");
-
-        // round trip: serialize our own suggestion, paste it back
-        var text = AiPatch.SerializeSuggestion(round, sha, "default",
-            new List<PatchChange> { new("x.inputOffset 横向输入阈值", "3", "3.6", "") });
-        var rt = AiPatch.Parse(text, doc, "default", round);
-        Check(rt.Ok && rt.Changes.Count == 1, "a suggestion emitted by the app itself parses back cleanly" +
-              (rt.Ok ? $" (changes={rt.Changes.Count})" : " :: " + string.Join(" | ", rt.Errors)) + " :: " + text.Replace("\n", "\\n"));
-
-        // applying twice in a row must not drift the document
-        var doc2 = BaseDoc();
-        var p1 = AiPatch.Parse(PatchJson(round, ConfigHash.Of(doc2.Profiles[0]), "\"changes\":{\"x\":{\"capY\":1.5}}"), doc2, "default", round);
-        doc2.Profiles[0] = p1.PreviewProfile!;
-        var p2 = AiPatch.Parse(PatchJson(round, ConfigHash.Of(doc2.Profiles[0]), "\"changes\":{\"x\":{\"capY\":1.5}}"), doc2, "default", round);
-        Check(p2.Ok && p2.Changes.Count == 0, "a no-op patch is accepted but reports nothing to change");
-
-        // the doc hash changes when a value changes (stale patch protection really works)
-        Check(ConfigHash.Of(BaseProfile()) != ConfigHash.Of(p1.PreviewProfile!), "config hash tracks a parameter change");
-    }
-
-    // ---------- F ----------
+    // ---------- E ----------
 
     static void Validate()
     {
@@ -432,7 +358,7 @@ public static class SelfTests
         Check(Json.Validate(time).Any(p => p.Contains("反了")), "inverted time clamp is caught");
     }
 
-    // ---------- G ----------
+    // ---------- F ----------
 
     static byte[] RawInputMouse(ushort usFlags, int dx, int dy, long device)
     {
@@ -494,7 +420,7 @@ public static class SelfTests
             "a respawn still keeps the configured distance from the click point");
     }
 
-    // ---------- K ----------
+    // ---------- J ----------
 
     static void DeviceWire()
     {
@@ -543,7 +469,7 @@ public static class SelfTests
             $"and the wire really does cut it at {device_settings.MAX_DEV_ID_LEN - 1} chars (got {cut.Id.Length})");
     }
 
-    // ---------- J ----------
+    // ---------- I ----------
 
     static void SimulatorChecks()
     {
@@ -622,7 +548,7 @@ public static class SelfTests
             $"radial median {st.RadialMedian:0.0}% vs {sh.RadialMedian:0.0}%");
     }
 
-    // ---------- I ----------
+    // ---------- H ----------
 
     static void OpenLoopChecks()
     {
@@ -875,7 +801,7 @@ public static class SelfTests
             $"and its impulse is not reported short by the unit gap ({r?.RadialPct:0.0}% vs {q?.RadialPct:0.0}%)");
     }
 
-    // ---------- H ----------
+    // ---------- G ----------
 
     static void Rules()
     {
@@ -900,7 +826,7 @@ public static class SelfTests
         Check(t2.Score().Contains("30 球"), "score line states what the round achieved");
     }
 
-    // ---------- E ----------
+    // ---------- D ----------
 
     static void Logging()
     {
@@ -1050,7 +976,7 @@ public static class SelfTests
         }
     }
 
-    // ---------- L ----------
+    // ---------- K ----------
 
     static RoundSummary RS(string file, string sha, string mode, double dist, int balls, string when,
                            double hit, double pace, double rad, double maxExtent = 0, int clicks = 60) =>
@@ -1195,7 +1121,7 @@ public static class SelfTests
             "numbers are interpolated into the Chinese text, not just the English one");
     }
 
-    // ---------- M ----------
+    // ---------- L ----------
 
     static void JitterChecks()
     {
@@ -1277,7 +1203,7 @@ public static class SelfTests
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // ---------- N ----------
+    // ---------- M ----------
 
     static void PresetChecks()
     {
