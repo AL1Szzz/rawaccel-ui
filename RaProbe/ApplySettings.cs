@@ -13,9 +13,17 @@ internal static class ApplySettings
     public static int Run(string[] args)
     {
         int i = Array.FindIndex(args, a => a == "--apply-settings");
-        string path = i >= 0 && i + 1 < args.Length ? args[i + 1] : @"D:\RawAccel\settings.json";
+        string path = i >= 0 && i + 1 < args.Length && !args[i + 1].StartsWith("--")
+            ? args[i + 1]
+            : SettingsFile.Find() ?? "";
         bool go = args.Contains("--yes");
 
+        if (path.Length == 0)
+        {
+            Console.WriteLine("没找到官方 settings.json，请用 --apply-settings <路径> 指定。找过：");
+            foreach (var c in SettingsFile.Candidates()) Console.WriteLine("   " + c);
+            return 2;
+        }
         if (!File.Exists(path)) { Console.WriteLine("文件不存在: " + path); return 2; }
         RootDto doc;
         try { doc = Json.Deserialize(File.ReadAllText(path)); }

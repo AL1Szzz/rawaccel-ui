@@ -30,8 +30,8 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // defaults: work on the official file unless the user pointed us elsewhere
-        string path = @"D:\RawAccel\settings.json";
+        // defaults: work on the official file wherever it is installed, else our own data folder
+        string path = RaCore.SettingsFile.Default();
         bool minimized = false, writeOnStart = false;
 
         for (int i = 0; i < e.Args.Length; i++)

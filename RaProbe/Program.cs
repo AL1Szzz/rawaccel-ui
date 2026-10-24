@@ -200,74 +200,79 @@ internal static class Program
         if (args.Contains("--selftest-json"))
         {
             Console.WriteLine("\n== 8. end-to-end: official settings.json -> our DTO -> driver blob ==");
-            const string file = @"D:\RawAccel\settings.json";
-            var text = File.ReadAllText(file);
-            var root = RaCore.Model.Json.Deserialize(text);
-            var mine = RaCore.Model.Convert4.BuildBlob(root);
-            var live = RaDevice.Read();
-
-            string H(byte[] x) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(x));
-            Console.WriteLine($"   profiles={root.Profiles.Count} devices={root.Devices.Count} " +
-                              $"defaultDpi={root.DefaultDeviceConfig.Dpi} blob={mine.Length}B driver={live.Length}B");
-            Console.WriteLine($"   our blob sha256   = {H(mine)}");
-            Console.WriteLine($"   driver blob sha256= {H(live)}");
-            Console.WriteLine("   => " + (H(mine) == H(live)
-                ? "IDENTICAL: settings.json parsed by our code produces exactly what the signed driver is running"
-                : "*** DIFFERS ***"));
-            if (H(mine) != H(live))
+            var official = SettingsFile.Find();
+            if (official == null)
+                Console.WriteLine("   no official settings.json found: skipped");
+            else
             {
-                var offs = new List<int>();
-                for (int i = 0; i < Math.Min(mine.Length, live.Length); i++) if (mine[i] != live[i]) offs.Add(i);
-                Console.WriteLine($"   differing bytes: {offs.Count} -> {string.Join(",", offs.Take(40))}{(offs.Count > 40 ? "..." : "")}");
+                var text = File.ReadAllText(official);
+                var root = RaCore.Model.Json.Deserialize(text);
+                var mine = RaCore.Model.Convert4.BuildBlob(root);
+                var live = RaDevice.Read();
 
-                // classify: is each difference inside a struct padding hole?
-                int padding = offs.Count(o => IsPadding(o));
-                Console.WriteLine($"   of those, {padding}/{offs.Count} fall in alignment padding (semantically dead bytes)");
-                foreach (var o in offs.Where(x => !IsPadding(x)).Take(20))
-                    Console.WriteLine($"   *** real difference at {o}: ours=0x{mine[o]:X2} driver=0x{live[o]:X2}");
-
-                static bool IsPadding(int o)
+                string H(byte[] x) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(x));
+                Console.WriteLine($"   profiles={root.Profiles.Count} devices={root.Devices.Count} " +
+                                  $"defaultDpi={root.DefaultDeviceConfig.Dpi} blob={mine.Length}B driver={live.Length}B");
+                Console.WriteLine($"   our blob sha256   = {H(mine)}");
+                Console.WriteLine($"   driver blob sha256= {H(live)}");
+                Console.WriteLine("   => " + (H(mine) == H(live)
+                    ? "IDENTICAL: settings.json parsed by our code produces exactly what the signed driver is running"
+                    : "*** DIFFERS ***"));
+                if (H(mine) != H(live))
                 {
-                    int ioBase = 40, mod = WireSizes.Modifier, prof = WireSizes.Profile, aa = WireSizes.AccelArgs;
-                    if (o < ioBase) return o == 3 || (o >= 12 && o <= 15);   // device_config tail pad before doubles
-                    int rel = o - ioBase;
-                    if (rel >= prof) return false;                            // modifier_data region checked below
-                    // profile: name(512) domain(16) range(16) then two accel_args, then speed_args, then 8 doubles
-                    if (rel < 512) return false;
-                    int r2 = rel - 512 - 32;                                  // into accel_x
-                    if (r2 >= 0 && r2 < 2 * aa)
+                    var offs = new List<int>();
+                    for (int i = 0; i < Math.Min(mine.Length, live.Length); i++) if (mine[i] != live[i]) offs.Add(i);
+                    Console.WriteLine($"   differing bytes: {offs.Count} -> {string.Join(",", offs.Take(40))}{(offs.Count > 40 ? "..." : "")}");
+
+                    // classify: is each difference inside a struct padding hole?
+                    int padding = offs.Count(o => IsPadding(o));
+                    Console.WriteLine($"   of those, {padding}/{offs.Count} fall in alignment padding (semantically dead bytes)");
+                    foreach (var o in offs.Where(x => !IsPadding(x)).Take(20))
+                        Console.WriteLine($"   *** real difference at {o}: ours=0x{mine[o]:X2} driver=0x{live[o]:X2}");
+
+                    static bool IsPadding(int o)
                     {
-                        int axis = r2 / aa, inAxis = r2 % aa;
-                        if (inAxis is >= 5 and <= 7) return true;              // gain byte + pad
-                        if (inAxis >= 128) return false;                       // lut data
+                        int ioBase = 40, mod = WireSizes.Modifier, prof = WireSizes.Profile, aa = WireSizes.AccelArgs;
+                        if (o < ioBase) return o == 3 || (o >= 12 && o <= 15);   // device_config tail pad before doubles
+                        int rel = o - ioBase;
+                        if (rel >= prof) return false;                            // modifier_data region checked below
+                        // profile: name(512) domain(16) range(16) then two accel_args, then speed_args, then 8 doubles
+                        if (rel < 512) return false;
+                        int r2 = rel - 512 - 32;                                  // into accel_x
+                        if (r2 >= 0 && r2 < 2 * aa)
+                        {
+                            int axis = r2 / aa, inAxis = r2 % aa;
+                            if (inAxis is >= 5 and <= 7) return true;              // gain byte + pad
+                            if (inAxis >= 128) return false;                       // lut data
+                            return false;
+                        }
+                        int r3 = rel - 512 - 32 - 2 * aa;                           // speed_args
+                        if (r3 >= 0 && r3 < 40) return r3 >= 1 && r3 <= 7;
                         return false;
                     }
-                    int r3 = rel - 512 - 32 - 2 * aa;                           // speed_args
-                    if (r3 >= 0 && r3 < 40) return r3 >= 1 && r3 <= 7;
-                    return false;
                 }
-            }
 
-            // round trip through our own serializer
-            var again = RaCore.Model.Json.Deserialize(RaCore.Model.Json.Serialize(root));
-            var mine2 = RaCore.Model.Convert4.BuildBlob(again);
-            Console.WriteLine("   reparse(serialize(root)) -> same blob: " + (H(mine2) == H(mine)));
+                // round trip through our own serializer
+                var again = RaCore.Model.Json.Deserialize(RaCore.Model.Json.Serialize(root));
+                var mine2 = RaCore.Model.Convert4.BuildBlob(again);
+                Console.WriteLine("   reparse(serialize(root)) -> same blob: " + (H(mine2) == H(mine)));
 
-            // textual diff vs the official file (formatting differences are informational only)
-            var ours = RaCore.Model.Json.Serialize(root).Replace("\r\n", "\n").Split('\n');
-            var orig = text.Replace("\r\n", "\n").Split('\n');
-            int diff = 0;
-            for (int i = 0; i < Math.Max(ours.Length, orig.Length); i++)
-            {
-                string lineOurs = i < ours.Length ? ours[i].Trim() : "<eof>";
-                string lineFile = i < orig.Length ? orig[i].Trim() : "<eof>";
-                if (lineOurs != lineFile)
+                // textual diff vs the official file (formatting differences are informational only)
+                var ours = RaCore.Model.Json.Serialize(root).Replace("\r\n", "\n").Split('\n');
+                var orig = text.Replace("\r\n", "\n").Split('\n');
+                int diff = 0;
+                for (int i = 0; i < Math.Max(ours.Length, orig.Length); i++)
                 {
-                    if (diff < 6) Console.WriteLine($"   line {i + 1}:\n     ours: {lineOurs}\n     file: {lineFile}");
-                    diff++;
+                    string lineOurs = i < ours.Length ? ours[i].Trim() : "<eof>";
+                    string lineFile = i < orig.Length ? orig[i].Trim() : "<eof>";
+                    if (lineOurs != lineFile)
+                    {
+                        if (diff < 6) Console.WriteLine($"   line {i + 1}:\n     ours: {lineOurs}\n     file: {lineFile}");
+                        diff++;
+                    }
                 }
+                Console.WriteLine($"   textual line diffs vs official file: {diff} (ours {ours.Length} lines, file {orig.Length} lines)");
             }
-            Console.WriteLine($"   textual line diffs vs official file: {diff} (ours {ours.Length} lines, file {orig.Length} lines)");
         }
 
         if (args.Contains("--devices"))
@@ -284,35 +289,41 @@ internal static class Program
         if (args.Contains("--selftest-devices"))
         {
             Console.WriteLine("\n== 10. device entries round-trip (no driver write) ==");
-            var root = RaCore.Model.Json.Deserialize(File.ReadAllText(@"D:\RawAccel\settings.json"));
-            var mice = DeviceEnum.ListMice();
-            Console.WriteLine($"   enumerated {mice.Count} mice; adding per-device entries with DPI=800");
-            foreach (var m in mice)
-                root.Devices.Add(new RaCore.Model.DeviceDto
-                {
-                    Id = m.Id,
-                    Name = m.Name,
-                    Profile = root.Profiles[0].Name,
-                    Config = new RaCore.Model.DeviceConfigDto { Dpi = 800 },
-                });
+            var officialDevices = SettingsFile.Find();
+            if (officialDevices == null)
+                Console.WriteLine("   no official settings.json found: skipped");
+            else
+            {
+                var root = RaCore.Model.Json.Deserialize(File.ReadAllText(officialDevices));
+                var mice = DeviceEnum.ListMice();
+                Console.WriteLine($"   enumerated {mice.Count} mice; adding per-device entries with DPI=800");
+                foreach (var m in mice)
+                    root.Devices.Add(new RaCore.Model.DeviceDto
+                    {
+                        Id = m.Id,
+                        Name = m.Name,
+                        Profile = root.Profiles[0].Name,
+                        Config = new RaCore.Model.DeviceConfigDto { Dpi = 800 },
+                    });
 
-            var devBlob = RaCore.Model.Convert4.BuildBlob(root);
-            int expect = WireSizes.IoBase + root.Profiles.Count * WireSizes.Modifier + root.Devices.Count * WireSizes.Device;
-            Console.WriteLine($"   blob = {devBlob.Length} bytes, expected {expect} -> {(devBlob.Length == expect ? "OK" : "*** MISMATCH ***")}");
+                var devBlob = RaCore.Model.Convert4.BuildBlob(root);
+                int expect = WireSizes.IoBase + root.Profiles.Count * WireSizes.Modifier + root.Devices.Count * WireSizes.Device;
+                Console.WriteLine($"   blob = {devBlob.Length} bytes, expected {expect} -> {(devBlob.Length == expect ? "OK" : "*** MISMATCH ***")}");
 
-            var back = RaCore.Model.Convert4.ReadBlob(devBlob);
-            Console.WriteLine($"   re-read devices: {back.Devices.Count}");
-            foreach (var d in back.Devices)
-                Console.WriteLine($"     id='{d.Id}' name='{d.Name}' profile='{d.Profile}' dpi={d.Config.Dpi} disable={d.Config.Disable}");
+                var back = RaCore.Model.Convert4.ReadBlob(devBlob);
+                Console.WriteLine($"   re-read devices: {back.Devices.Count}");
+                foreach (var d in back.Devices)
+                    Console.WriteLine($"     id='{d.Id}' name='{d.Name}' profile='{d.Profile}' dpi={d.Config.Dpi} disable={d.Config.Disable}");
 
-            // settings.json already carries its own device entries, so compare only the tail we added
-            bool idsOk = back.Devices.TakeLast(mice.Count).Select(d => d.Id).SequenceEqual(mice.Select(m => m.Id));
-            Console.WriteLine("   ids survive the binary round trip: " + idsOk);
+                // settings.json already carries its own device entries, so compare only the tail we added
+                bool idsOk = back.Devices.TakeLast(mice.Count).Select(d => d.Id).SequenceEqual(mice.Select(m => m.Id));
+                Console.WriteLine("   ids survive the binary round trip: " + idsOk);
 
-            // what the driver would actually compare against (BusQueryDeviceID style, upper case)
-            Console.WriteLine("   driver-side comparison is wcsncmp(devExt->dev_id, id, 200); our ids are upper-case canonical:");
-            foreach (var d in back.Devices)
-                Console.WriteLine($"     {d.Id}  {(d.Id == d.Id.ToUpperInvariant() ? "OK" : "*** not upper ***")}");
+                // what the driver would actually compare against (BusQueryDeviceID style, upper case)
+                Console.WriteLine("   driver-side comparison is wcsncmp(devExt->dev_id, id, 200); our ids are upper-case canonical:");
+                foreach (var d in back.Devices)
+                    Console.WriteLine($"     {d.Id}  {(d.Id == d.Id.ToUpperInvariant() ? "OK" : "*** not upper ***")}");
+            }
         }
 
         if (args.Contains("--display"))
@@ -379,7 +390,14 @@ internal static class Program
     {
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(@"D:\RawAccel\settings.json"));
+            var official = SettingsFile.Find();
+            if (official == null)
+            {
+                Console.WriteLine("   no official settings.json found: cross-check skipped " +
+                                  "(the driver dump above still stands on its own)");
+                return;
+            }
+            using var doc = JsonDocument.Parse(File.ReadAllText(official));
             var prof = doc.RootElement.GetProperty("profiles")[0];
             var hx = prof.GetProperty("Whole or horizontal accel parameters");
             var hy = prof.GetProperty("Vertical accel parameters");

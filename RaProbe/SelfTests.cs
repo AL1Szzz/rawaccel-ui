@@ -50,6 +50,9 @@ public static class SelfTests
         Console.WriteLine("\n== H. CurveAnalysis: where the curve leaves its own baseline ==");
         Section("curve", CurveChecks);
 
+        Console.WriteLine("\n== I. SettingsFile: the official path is found, never assumed ==");
+        Section("settings", SettingsChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -431,5 +434,27 @@ public static class SelfTests
         var fx = CurveAnalysis.Analyze(Convert4.ToStruct(flat), true);
         Check(fx.Threshold == 0 && double.IsInfinity(fx.CapSpeed) && Math.Abs(fx.PeakGain - 1) < 1e-6,
             "a profile with no acceleration reads as no acceleration (threshold 0, no cap, gain 1)");
+    }
+
+    // ---------- I ----------
+
+    static void SettingsChecks()
+    {
+        var candidates = SettingsFile.Candidates();
+        Check(candidates.Count >= 6, $"the official file is looked for in {candidates.Count} places, not one");
+        Check(candidates.All(c => Path.IsPathRooted(c)), "every candidate is an absolute path");
+        Check(candidates.Any(c => c.Contains("Raw Accel", StringComparison.OrdinalIgnoreCase)),
+            "the official install layout is among them, so the two tools share one settings.json");
+        Check(candidates.Any(c => c.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)),
+            "a copy of the app sitting next to its own settings.json also works (portable folder)");
+
+        var found = SettingsFile.Find();
+        Check(found == null || File.Exists(found), "Find() either names a file that exists or says nothing");
+
+        var def = SettingsFile.Default();
+        Check(def.EndsWith("settings.json", StringComparison.OrdinalIgnoreCase),
+            $"the UI always has a settings path to save to: {def}");
+        Check(Directory.Exists(Path.GetDirectoryName(def)),
+            "and its folder really exists, so the first save cannot fail on a missing directory");
     }
 }

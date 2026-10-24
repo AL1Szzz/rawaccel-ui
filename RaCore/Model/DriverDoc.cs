@@ -8,7 +8,7 @@ namespace RaCore.Model;
 
 // DTO layer that is byte-for-byte compatible with the official Raw Accel settings.json.
 // Property declaration order below == order emitted by wrapper.dll's Newtonsoft contract
-// (verified against rawaccel-src/wrapper/wrapper.cpp and D:\RawAccel\settings.json).
+// (verified field by field against the upstream rawaccel wrapper source and a real settings.json).
 
 public sealed class Vec2Dto
 {
