@@ -6,8 +6,10 @@ rem NOTE: keep this file ASCII-only - cmd.exe reads it in the OEM codepage and U
 rem comments turn into garbage that it then tries to execute. field\check-cmd.mjs enforces this.
 cd /d "%~dp0"
 
-set "NODE=C:\Users\you\node-v24.21.0-win-x64\node.exe"
-if not exist "%NODE%" set "NODE=node"
+set "NODE=node"
+if exist "%USERPROFILE%\node-v24.21.0-win-x64\node.exe" set "NODE=%USERPROFILE%\node-v24.21.0-win-x64\node.exe"
+rem RAUI_NODE wins when set, so a non-standard node install needs no script edits.
+if defined RAUI_NODE set "NODE=%RAUI_NODE%"
 
 rem ---- gate 1: the double-click launchers in this folder ----
 rem A broken .cmd is invisible until someone double-clicks it mid-test, and the classic ways it

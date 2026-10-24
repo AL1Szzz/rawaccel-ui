@@ -3,8 +3,10 @@ chcp 65001 >nul
 cd /d "%~dp0"
 rem Capture 60 s of raw mouse packets during a real spray, then analyze the Y
 rem component. Read-only; no driver writes. ASCII-only: cmd OEM codepage.
-set "NODE=C:\Users\you\node-v24.21.0-win-x64\node.exe"
-if not exist "%NODE%" set "NODE=node"
+set "NODE=node"
+if exist "%USERPROFILE%\node-v24.21.0-win-x64\node.exe" set "NODE=%USERPROFILE%\node-v24.21.0-win-x64\node.exe"
+rem RAUI_NODE wins when set, so a non-standard node install needs no script edits.
+if defined RAUI_NODE set "NODE=%RAUI_NODE%"
 
 echo.
 echo  RAUI SPRAY-Y CAPTURE   (read-only, 60 seconds)
