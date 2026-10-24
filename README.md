@@ -100,6 +100,7 @@ test-history.csv    小球测试成绩（一行一次，中文表头，任何编
 presets\            我的方案（同名 .txt 是人话说明）；history\ 是覆盖/删除前的自动备份
 config-backups\     settings.json 的时间戳备份（保留最近 60 份）
 raui.ui.json        界面偏好（与驱动配置分开，绝不会污染官方 settings.json）
+settings-path.txt   可选：只写一行路径。程序猜不到官方 settings.json 装在哪时才用它
 ```
 
 驱动配置文件沿用官方的 `settings.json`：程序会在常见安装位置里找它（找不到就用自己数据目录里的一份，并在界面上写明），所以官方 GUI 和本程序改的是同一个文件。命令行想指定别的文件用 `--settings <路径>`。

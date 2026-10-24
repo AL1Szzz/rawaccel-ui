@@ -448,6 +448,17 @@ public static class SelfTests
         Check(candidates.Any(c => c.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)),
             "a copy of the app sitting next to its own settings.json also works (portable folder)");
 
+        // the override exists so a personal install layout can stay out of the source tree
+        var withExtra = SettingsFile.Candidates(@"D:\Elsewhere\settings.json");
+        Check(withExtra[0] == @"D:\Elsewhere\settings.json", "an explicit override is searched before every guess");
+        Check(withExtra.Count == candidates.Count + 1 || withExtra.Count == candidates.Count,
+            "the override adds a candidate instead of replacing the list");
+        Check(SettingsFile.Candidates("  ").SequenceEqual(SettingsFile.Candidates(null)),
+            "a blank override changes nothing");
+        Check(SettingsFile.OverrideFile.EndsWith("settings-path.txt", StringComparison.OrdinalIgnoreCase)
+              && SettingsFile.OverrideFile.StartsWith(AppData.Root, StringComparison.OrdinalIgnoreCase),
+              $"the override is read from the data folder, not from the repo: {SettingsFile.OverrideFile}");
+
         var found = SettingsFile.Find();
         Check(found == null || File.Exists(found), "Find() either names a file that exists or says nothing");
 

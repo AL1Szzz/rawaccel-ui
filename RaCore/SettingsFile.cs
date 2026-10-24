@@ -9,12 +9,34 @@ namespace RaCore;
 public static class SettingsFile
 {
     /// <summary>
-    /// Candidate locations, most-official first. The last one is the folder this project was
-    /// developed against, so the author's own layout keeps working without a special case.
+    /// Optional one-line file naming the settings.json to use, for an install layout no candidate
+    /// list can guess. It lives in the data folder rather than in the source, so a personal path
+    /// stays on the machine that owns it.
     /// </summary>
-    public static List<string> Candidates()
+    public static string OverrideFile => Path.Combine(AppData.Root, "settings-path.txt");
+
+    static string? ReadOverride()
+    {
+        try
+        {
+            if (!File.Exists(OverrideFile)) return null;
+            var s = File.ReadAllText(OverrideFile).Trim();
+            return s.Length > 0 ? s : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Candidate locations, most-official first. The override, when present, wins.</summary>
+    public static List<string> Candidates() => Candidates(ReadOverride());
+
+    /// <summary>
+    /// The same list with one path forced to the front - split out so the ordering is testable
+    /// without writing into the real data folder.
+    /// </summary>
+    public static List<string> Candidates(string? extraFirst)
     {
         var list = new List<string>();
+        if (!string.IsNullOrWhiteSpace(extraFirst)) list.Add(extraFirst.Trim());
         void AddUnder(string? dir, string sub)
         {
             if (string.IsNullOrEmpty(dir)) return;
@@ -30,7 +52,6 @@ public static class SettingsFile
         AddUnder(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), official);
         AddUnder(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), official);
         AddUnder(AppContext.BaseDirectory, official);
-        list.Add(@"D:\RawAccel\settings.json");
 
         return list.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
