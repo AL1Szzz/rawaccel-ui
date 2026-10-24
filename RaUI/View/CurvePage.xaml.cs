@@ -1,8 +1,6 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Media;
 using RaCore.Model;
 
 namespace RaUI.View;
@@ -48,177 +46,22 @@ public partial class CurvePage : UserControl
             new System.Windows.Data.Binding(nameof(AppState.YAxisLabel)) { Source = App.State });
 
         BuildForm();
+        UpdateEditingState();
 
         App.State.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.CanWrite) or nameof(AppState.Busy))
+                Dispatcher.Invoke(UpdateEditingState);
             if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.Series))
                 Dispatcher.Invoke(RefreshValues);
-            // the preset bar only needs a rebuild when the selection or the driver changed:
-            // Series updates with the telemetry timer and must not re-read the driver that often
-            if (e.PropertyName is nameof(AppState.SelectedProfile) or nameof(AppState.LiveProfileSha)
-                                             or nameof(AppState.CanWrite))
-                Dispatcher.Invoke(RebuildPresetBar);
         };
 
-        Loaded += (_, _) => { RefreshValues(); RebuildPresetBar(); };
+        Loaded += (_, _) => { UpdateEditingState(); RefreshValues(); };
     }
 
-    // ---------- 曲线列表 ----------
-
-    string armedPreset = "";
-    DateTime armedAt;
-    TextBox txtPresetName;
-
-    Brush Tertiary() => (Brush)FindResource("TextTertiaryBrush");
-
-    /// <summary>
-    /// The curves he can switch between, named in Chinese by what they DO. The one the driver
-    /// reports right now gets a check mark; a click arms the button and a second click within six
-    /// seconds writes, because switching moves the mouse for about a second and must never happen
-    /// on a stray click mid-spray - and no modal dialog, which would take focus away from a game.
-    /// </summary>
-    /// <summary>Re-entrancy guard: rebuilding reads the driver, and the driver read raises the
-    /// property this page listens to, so without it the bar would rebuild itself forever.</summary>
-    void RebuildPresetBar()
+    void UpdateEditingState()
     {
-        if (PresetBar == null || rebuildingBar) return;
-        rebuildingBar = true;
-        try { RebuildPresetBarInner(); }
-        finally { rebuildingBar = false; }
-    }
-
-    bool rebuildingBar;
-
-    void RebuildPresetBarInner()
-    {
-        if (PresetBar == null) return;
-        PresetBar.Children.Clear();
-        PresetTools.Children.Clear();
-        App.State.RefreshLiveSha();
-        var list = App.State.ListPresets();
-
-        PresetBar.Children.Add(new TextBlock
-        {
-            Text = "现在用的曲线", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 4),
-            Foreground = Tertiary()
-        });
-
-        if (list.Count == 0)
-            PresetBar.Children.Add(new TextBlock
-            {
-                Text = "（还没存过，先把眼下这份起个名字存下来）",
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4),
-                Foreground = Tertiary()
-            });
-
-        foreach (var p in list)
-        {
-            bool live = string.Equals(p.Sha, App.State.LiveProfileSha, StringComparison.OrdinalIgnoreCase);
-            bool armed = string.Equals(armedPreset, p.Name, StringComparison.OrdinalIgnoreCase);
-            var b = new Button
-            {
-                Content = (live ? "✓ " : "") + p.Name + (armed ? "　再点一次就写入" : ""),
-                Tag = p.Name,
-                Margin = new Thickness(0, 0, 6, 4),
-                Padding = new Thickness(10, 3, 10, 3),
-                FontWeight = live ? FontWeights.Bold : FontWeights.Normal,
-                ToolTip = $"{p.Summary}\n\n（给助手核对用）配置 {p.Sha}\n文件 {p.File}",
-                IsEnabled = App.State.DriverReachable && !App.State.Busy,
-            };
-            b.Click += OnPreset;
-            PresetBar.Children.Add(b);
-        }
-
-        // second line: what the live curve actually is, in words
-        var livePreset = list.FirstOrDefault(p => string.Equals(p.Sha, App.State.LiveProfileSha, StringComparison.OrdinalIgnoreCase));
-        LivePreset.Text = !App.State.DriverReachable
-            ? "驱动没连上：只能存取，不能写入"
-            : livePreset != null
-                ? $"驱动里跑的是「{livePreset.Name}」：{livePreset.Summary}"
-                : $"驱动里是一份没存过的配置（{Short(App.State.LiveProfileSha)}）：改满意了就起个中文名存下来";
-
-        // third line: the housekeeping, deliberately quieter than the switch buttons
-        txtPresetName = new TextBox
-        {
-            Width = 132,
-            Margin = new Thickness(0, 0, 4, 4),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Text = SuggestedPresetName(),
-            ToolTip = "给现在界面里这份曲线起个中文名，比如「压枪 1.2」。这个名字就是列表里看到的按钮名。",
-        };
-        PresetTools.Children.Add(txtPresetName);
-
-        PresetTools.Children.Add(Tool("存为一条曲线", "把界面现在这份（含还没写入的草稿）按上面那个名字存进列表", OnSavePreset));
-        PresetTools.Children.Add(Tool("删除这条", "把上面输入框里写着的那条从列表里删掉（不动驱动）", OnDeletePreset));
-        PresetTools.Children.Add(Tool("从 curves 文件夹导入", "把仓库 curves\\*.json 里的旧实验配置读进列表", OnImportCurves));
-    }
-
-    Button Tool(string text, string tip, RoutedEventHandler onClick)
-    {
-        var b = new Button
-        {
-            Content = text,
-            Margin = new Thickness(0, 0, 6, 4),
-            Padding = new Thickness(9, 3, 9, 3),
-            Foreground = Tertiary(),
-            ToolTip = tip,
-        };
-        b.Click += onClick;
-        return b;
-    }
-
-    static string Short(string sha) => string.IsNullOrEmpty(sha) ? "读不到" : (sha.Length > 6 ? sha[..6] : sha);
-
-    string SuggestedPresetName()
-    {
-        var p = App.State.SelectedProfile;
-        if (p == null) return "新曲线";
-        // a name he can read back tomorrow, built from the one number that usually changes
-        if (Math.Abs(p.YxRatio - 1) > 1e-9) return $"压枪 {p.YxRatio.ToString("0.##", CultureInfo.InvariantCulture)}";
-        if (Math.Abs(p.X.Acceleration - 0.06) > 1e-9) return $"横向 {p.X.Acceleration.ToString("0.###", CultureInfo.InvariantCulture)}";
-        return "新曲线";
-    }
-
-    async void OnPreset(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button b) return;
-        string name = (string)b.Tag;
-
-        if (!string.Equals(armedPreset, name, StringComparison.OrdinalIgnoreCase) || (DateTime.Now - armedAt).TotalSeconds > 6)
-        {
-            armedPreset = name; armedAt = DateTime.Now;
-            App.State.Status = $"再点一次「{name}」就写入驱动（鼠标可能卡一秒）。点别的或等六秒就取消。";
-            RebuildPresetBar();
-            return;
-        }
-
-        armedPreset = "";
-        await App.State.ApplyPresetAsync(name);
-        RebuildPresetBar();
-    }
-
-    void OnSavePreset(object sender, RoutedEventArgs e)
-    {
-        App.State.SavePreset(txtPresetName?.Text ?? "");
-        armedPreset = "";
-        RebuildPresetBar();
-    }
-
-    void OnDeletePreset(object sender, RoutedEventArgs e)
-    {
-        string name = txtPresetName?.Text?.Trim() ?? "";
-        var hit = App.State.ListPresets().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (hit == null) { App.State.Status = "先在名字框里写上要删的那条曲线的名字"; return; }
-        App.State.DeletePreset(hit.Name);
-        armedPreset = "";
-        RebuildPresetBar();
-    }
-
-    void OnImportCurves(object sender, RoutedEventArgs e)
-    {
-        App.State.ImportCurveFiles();
-        armedPreset = "";
-        RebuildPresetBar();
+        ParamCard.IsEnabled = !App.State.Busy && App.State.SelectedProfile != null;
     }
 
     // ---------- axis-specific parameters ----------
@@ -267,62 +110,8 @@ public partial class CurvePage : UserControl
 
     void BuildForm()
     {
-        Form.Children.Add(Section("配置文件"));
-
-        var pick = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
-        var nameTemplate = new System.Windows.DataTemplate(typeof(ProfileDto));
-        var fef = new FrameworkElementFactory(typeof(TextBlock));
-        fef.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(ProfileDto.Name)));
-        fef.SetValue(TextBlock.ForegroundProperty, (Brush)FindResource("TextPrimaryBrush"));
-        fef.SetValue(TextBlock.FontSizeProperty, 13.0);
-        nameTemplate.VisualTree = fef;
-        pick.ItemTemplate = nameTemplate;
-        pick.SetBinding(ItemsControl.ItemsSourceProperty, new System.Windows.Data.Binding(nameof(AppState.Profiles)));
-        pick.SetBinding(Selector.SelectedItemProperty,
-            new System.Windows.Data.Binding(nameof(AppState.SelectedProfile)) { Mode = System.Windows.Data.BindingMode.TwoWay });
-        Form.Children.Add(pick);
-
-        // preset management
-        var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
-        var nameBox = new TextBox { MinHeight = 28, Width = 140, Text = App.State.SelectedProfile?.Name ?? "" };
-        nameBox.LostFocus += (_, _) =>
-        {
-            var p = App.State.SelectedProfile;
-            if (p != null && !string.IsNullOrWhiteSpace(nameBox.Text) && p.Name != nameBox.Text.Trim())
-            {
-                App.State.RenameSelectedProfile(nameBox.Text);
-                nameBox.Text = App.State.SelectedProfile?.Name ?? "";
-            }
-        };
-        tools.Children.Add(nameBox);
-
-        var dup = new Button { Content = "复制", MinHeight = 28, Margin = new Thickness(6, 0, 0, 0) };
-        dup.Click += (_, _) =>
-        {
-            App.State.AddProfile((App.State.SelectedProfile?.Name ?? "profile") + " 副本");
-            RefreshValues();
-        };
-        tools.Children.Add(dup);
-
-        var del = new Button { Content = "删除", MinHeight = 28, Margin = new Thickness(6, 0, 0, 0) };
-        del.Click += (_, _) =>
-        {
-            var p = App.State.SelectedProfile;
-            if (p == null) return;
-            App.State.RemoveProfileAt(App.State.Doc.Profiles.IndexOf(p));
-            RefreshValues();
-        };
-        tools.Children.Add(del);
-
-        var tip = new TextBlock
-        {
-            Text = "每个配置可在“设备”页按鼠标单独指定",
-            FontSize = 11.5,
-            Margin = new Thickness(0, 2, 0, 6),
-        };
-        tip.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
-        Form.Children.Add(tip);
-        Form.Children.Add(tools);
+        ParamPanel.Children.Add(Section("输出倍率"));
+        AddProfileRows(ProfRows.Take(4));
 
         ParamPanel.Children.Add(Section("加速参数（X / Y 独立）"));
 
@@ -349,8 +138,13 @@ public partial class CurvePage : UserControl
             ParamPanel.Children.Add(g);
         }
 
-        ParamPanel.Children.Add(Section("速度计算 / 输出 / 全局"));
-        foreach (var r in ProfRows)
+        ParamPanel.Children.Add(Section("速度计算 / 全局"));
+        AddProfileRows(ProfRows.Skip(4));
+    }
+
+    void AddProfileRows(IEnumerable<ProfRow> rows)
+    {
+        foreach (var r in rows)
         {
             var g = new Grid { Margin = new Thickness(0, 1, 0, 1) };
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -423,6 +217,7 @@ public partial class CurvePage : UserControl
                 var tb = new TextBox { Margin = new Thickness(4, 2, 0, 2), MinHeight = 28 };
                 void CommitIt()
                 {
+                    if (suppress || App.State.Busy || App.State.SelectedProfile == null) return;
                     // never let NaN / Infinity / 1e300 reach the driver: it precomputes
                     // logarithms and roots from these and the mouse can become unusable
                     if (double.TryParse(tb.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
@@ -449,6 +244,7 @@ public partial class CurvePage : UserControl
 
     void Commit(Action apply)
     {
+        if (suppress || App.State.Busy || App.State.SelectedProfile == null) return;
         try { apply(); } catch { /* keep the old value on a bad assignment */ }
         App.State.Touch();
         App.State.RebuildCurves();
@@ -482,38 +278,15 @@ public partial class CurvePage : UserControl
             }
         }
         finally { suppress = false; }
-
-        UpdateNote();
     }
 
     static bool HasFocus(Control c) => c.IsKeyboardFocused || c.IsKeyboardFocusWithin;
-
-    void UpdateNote()
-    {
-        var p = App.State.SelectedProfile;
-        if (p == null) { ChartNote.Text = ""; PhysicsNote.Text = ""; return; }
-
-        // The 起加速 / 封顶 numbers are drawn on the chart itself now (labelled X起 / X顶 / Y起 / Y顶),
-        // so repeating them as a sentence below only creates a second place to keep in sync.
-        ChartNote.Text = App.State.Telemetry + "（色带百分比 = 你最近的手速落在各段的占比，按 X 轴计）";
-        PhysicsNote.Text = App.State.PhysicsReadout(p);
-    }
-
-    void OnToggleParams(object sender, RoutedEventArgs e)
-    {
-        bool open = ParamCard.Visibility != Visibility.Visible;
-        ParamCard.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        // escaped, not literal: this line used to print "调整参数 25be" because a bare
-        // 25be in a normal string is just text. The XAML label uses the real glyph.
-        BtnParams.Content = open ? "收起参数 \u25B4" : "调整参数 \u25BE";
-    }
 
     void OnSamples(object sender, RoutedEventArgs e)
     {
         App.State.ShowSamples = ChkSamples.IsChecked == true;
         AppState.Prefs.ShowSamples = App.State.ShowSamples;
         AppState.SavePrefs();
-        UpdateNote();
     }
 
     void OnKind(object sender, RoutedEventArgs e)
@@ -522,7 +295,6 @@ public partial class CurvePage : UserControl
         App.State.CurveKind = RbSens.IsChecked == true ? CurveKind.Sensitivity
                              : RbGain.IsChecked == true ? CurveKind.Gain : CurveKind.Sensitivity;
         App.State.RebuildCurves();
-        UpdateNote();
     }
 
     void OnChartScale(object sender, RoutedEventArgs e)
@@ -533,6 +305,5 @@ public partial class CurvePage : UserControl
         AppState.Prefs.ChartPollRate = App.State.ChartPollRate;
         AppState.SavePrefs();
         App.State.RebuildCurves();
-        UpdateNote();
     }
 }

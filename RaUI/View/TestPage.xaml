@@ -9,8 +9,8 @@
 
         <StackPanel Grid.Row="0" Margin="4,6,4,10">
             <TextBlock Text="瞄准测试" Style="{StaticResource TitleTextStyle}"/>
-            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0" TextWrapping="Wrap"
-                       Text="很多球同屏，连着点：点掉的球立刻刷新到别的位置，指针不回中心。可以按“点掉多少个球”计（没点中的不算数），也可以按“限时多少秒”计（看这段时间能点掉几个）。屏幕上方实时显示剩余/倒计时和当前命中率。软件不做主观判断，只把每一轮如实写进日志，日志交给 AI，AI 返回的方案粘回下面的框。"/>
+            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"
+                       Text="点中小球练习手感，Esc 随时结束。"/>
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -29,122 +29,36 @@
                             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                                 <Button x:Name="BtnStart" Content="开始全屏测试" Style="{StaticResource AccentButton}"
                                         MinWidth="168" MinHeight="36" Click="OnStart"/>
-                                <Button Content="不改分辨率，无边框跑" Margin="10,0,0,0" Click="OnStartKeepMode"/>
+                                <Button Content="保持当前分辨率" Margin="10,0,0,0" Click="OnStartKeepMode"/>
                             </StackPanel>
+                            <TextBlock x:Name="Summary" Style="{StaticResource SubtleTextStyle}" Margin="0,10,0,0"
+                                       TextWrapping="Wrap" Visibility="Collapsed"/>
                             <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,10,0,0" TextWrapping="Wrap"
-                                       Text="Esc 随时结束并带回结果。切过分辨率的话关闭时会自动还原；还原失败会在本轮日志里写清楚，也可以去 Windows 显示设置手动改回。"/>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                        <StackPanel>
-                            <TextBlock Text="这一轮的数据" FontWeight="SemiBold" FontSize="14"/>
-                            <TextBlock x:Name="Summary" Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap"/>
-                            <TextBlock x:Name="Flags" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
-                                       Foreground="#FFFCE100"/>
-                            <TextBlock x:Name="LogInfo" Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0"
-                                       TextWrapping="Wrap" Text="还没跑本轮，日志未生成。"/>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                        <StackPanel>
-                            <TextBlock Text="成绩历史" FontWeight="SemiBold" FontSize="14"/>
-                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,6" TextWrapping="Wrap"
-                                       Text="logs\ 里全部轮次，新的在上面。点一行看详情，下面有“复制给 AI / 打开文件 / 设为当前”。判读阈值按同配置 10 轮估计，是参考不是定律。"/>
-                            <ListView x:Name="HistoryList" Height="204" SelectionMode="Single" FontSize="12.5"
-                                      Background="#FF1F1F1F" BorderBrush="#FF3D3D3D" BorderThickness="1"
-                                      SelectionChanged="OnHistorySelect">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="时间" Width="120" DisplayMemberBinding="{Binding Time}"/>
-                                        <GridViewColumn Header="命中" Width="108" DisplayMemberBinding="{Binding Hit}"/>
-                                        <GridViewColumn Header="节奏" Width="64" DisplayMemberBinding="{Binding Pace}"/>
-                                        <GridViewColumn Header="越过头" Width="58" DisplayMemberBinding="{Binding Extent}"/>
-                                        <GridViewColumn Header="配置" Width="92" DisplayMemberBinding="{Binding Sha}"/>
-                                        <GridViewColumn Header="注意" Width="96" DisplayMemberBinding="{Binding Warn}"/>
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-                            <Border x:Name="HistoryDetail" Visibility="Collapsed" Margin="0,10,0,0" Padding="12,10"
-                                    Background="#FF262626" CornerRadius="6">
-                                <StackPanel>
-                                    <TextBlock x:Name="DetailHead" TextWrapping="Wrap" FontSize="12.5"/>
-                                    <TextBlock x:Name="DetailOpen" Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"
-                                               TextWrapping="Wrap" FontSize="12"/>
-                                    <TextBlock x:Name="DetailShape" Style="{StaticResource SubtleTextStyle}" Margin="0,3,0,0"
-                                               TextWrapping="Wrap" FontSize="12" Foreground="#FF9BD8FF"/>
-                                    <Expander x:Name="NotesExpander" Visibility="Collapsed" Margin="0,8,0,0">
-                                        <Expander.Header>
-                                            <TextBlock x:Name="NotesHeader" Text="注意点"/>
-                                        </Expander.Header>
-                                        <StackPanel x:Name="NotesList" Margin="2,6,0,0"/>
-                                    </Expander>
-                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                        <Button Content="复制日志给 AI" MinHeight="28" Click="OnCopySelected"/>
-                                        <Button Content="打开文件" MinHeight="28" Margin="8,0,0,0" Click="OnOpenSelected"/>
-                                        <Button Content="把此轮配置设为当前" MinHeight="28" Margin="8,0,0,0" Click="OnUseBAsCurrent"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-                            <Expander Margin="0,12,0,0" IsExpanded="True">
-                                <Expander.Header>
-                                    <TextBlock Text="分组对比（自动：最新两组）" FontWeight="SemiBold"/>
-                                </Expander.Header>
-                                <TextBlock x:Name="GroupCompare" Style="{StaticResource SubtleTextStyle}" Margin="4,8,0,0"
-                                           TextWrapping="Wrap" FontSize="12.5" LineHeight="19"/>
-                            </Expander>
-                            <Expander Margin="0,4,0,0">
-                                <Expander.Header>
-                                    <TextBlock Text="高级：手动挑两轮对比" FontWeight="SemiBold"/>
-                                </Expander.Header>
-                                <StackPanel Margin="0,8,0,0">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="基准 A" Style="{StaticResource SubtleTextStyle}" Margin="0,2,0,2"/>
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="对比 B" Style="{StaticResource SubtleTextStyle}" Margin="8,2,0,2"/>
-                                        <ComboBox Grid.Row="1" Grid.Column="0" x:Name="CmbA" Height="30" Margin="0,0,6,0"
-                                                  VerticalContentAlignment="Center" FontSize="12"/>
-                                        <ComboBox Grid.Row="1" Grid.Column="1" x:Name="CmbB" Height="30"
-                                                  VerticalContentAlignment="Center" FontSize="12"/>
-                                    </Grid>
-                                    <TextBlock x:Name="Compare" Margin="0,10,0,0" TextWrapping="Wrap" FontSize="12.5"
-                                               FontFamily="Cascadia Mono, Consolas"/>
-                                </StackPanel>
-                            </Expander>
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button Content="清理旧日志…" MinHeight="28" Click="OnCleanup"/>
-                                <Button Content="打开日志目录" MinHeight="28" Margin="8,0,0,0" Click="OnOpenLogDir"/>
-                            </StackPanel>
+                                       Text="结束后自动还原分辨率；若还原失败，状态栏会提示，可到 Windows 显示设置手动改回。"/>
                         </StackPanel>
                     </Border>
 
                     <Border Style="{StaticResource Card}" Margin="0,12,0,12">
                         <StackPanel>
-                            <TextBlock Text="把 AI 的方案粘回这里" FontWeight="SemiBold" FontSize="14"/>
-                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,8" TextWrapping="Wrap"
-                                       Text="格式：kind=&quot;raui.tune-patch&quot;、schema=1、round=本轮日志名、baseConfig=日志里的 config sha、profile=当前档名、changes 里只允许 x/y/profile/speed 的白名单字段。软件只认这些字段，越界、未知键、非有限数字、轮次或配置对不上都会拒绝。确认写入后，下一轮日志会写明“本轮之前应用了哪个改动”。"/>
-                            <TextBox x:Name="TxtPatch" MinHeight="150" MaxHeight="220" AcceptsReturn="True"
-                                     TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
-                                     FontFamily="Cascadia Mono, Consolas" FontSize="12"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <Button Content="从剪贴板粘贴" MinHeight="30" Click="OnPaste"/>
-                                <Button x:Name="BtnValidate" Content="校验并预览" Style="{StaticResource AccentButton}"
-                                        MinHeight="30" Margin="8,0,0,0" Click="OnValidate"/>
-                                <Button x:Name="BtnConfirm" Content="确认写入驱动" MinHeight="30" Margin="8,0,0,0"
-                                        IsEnabled="False" Click="OnConfirm"/>
-                                <Button x:Name="BtnRevert" Content="撤回上一次改动" MinHeight="30" Margin="8,0,0,0"
-                                        IsEnabled="False" Click="OnRevert"/>
-                            </StackPanel>
-                            <TextBlock x:Name="PatchDiff" Margin="0,12,0,0" TextWrapping="Wrap" FontFamily="Cascadia Mono, Consolas" FontSize="12"/>
-                            <TextBlock x:Name="PatchNote" Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            <TextBlock Text="成绩历史" FontWeight="SemiBold" FontSize="14"/>
+                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,6"
+                                       Text="最近 80 次，新的在上面。"/>
+                            <ListView x:Name="HistoryList" Height="204" FontSize="12.5"
+                                      Background="#FF1F1F1F" BorderBrush="#FF3D3D3D" BorderThickness="1">
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="ListViewItem">
+                                        <Setter Property="Focusable" Value="False"/>
+                                        <Setter Property="IsHitTestVisible" Value="False"/>
+                                    </Style>
+                                </ListView.ItemContainerStyle>
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="时间" Width="140" DisplayMemberBinding="{Binding Time}"/>
+                                        <GridViewColumn Header="点掉" Width="70" DisplayMemberBinding="{Binding Cleared}"/>
+                                        <GridViewColumn Header="命中率" Width="80" DisplayMemberBinding="{Binding HitRate}"/>
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -152,7 +66,7 @@
 
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
-                    <Border Style="{StaticResource Card}">
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                         <StackPanel>
                             <TextBlock Text="测试设置" FontWeight="SemiBold" Margin="0,0,0,8"/>
                             <Grid>
@@ -166,12 +80,10 @@
                                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Text="刷新距离 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
-                                           ToolTip="球被点掉后，新位置离你点击处的物理像素距离。实际每次甩动距离由“上一个球→下一个球”决定，日志记的是真实值"/>
+                                           ToolTip="球被点掉后，新位置离点击处的物理像素距离。"/>
                                 <TextBox x:Name="TxtDistance" Grid.Row="0" Grid.Column="1" Text="420" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
 
                                 <TextBlock Grid.Row="1" Text="球半径 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
@@ -189,7 +101,7 @@
                                 </ComboBox>
 
                                 <TextBlock Grid.Row="3" Text="计数方式" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
-                                           ToolTip="按球数：必须点掉设定数量的球才算完，没点中不消耗额度。限时：到点结束，看能点掉几个"/>
+                                           ToolTip="按球数：点掉设定数量才结束，没点中不计数。限时：时间到后结束。"/>
                                 <ComboBox x:Name="CmbMode" Grid.Row="3" Grid.Column="1" Height="28" Margin="6,3,0,3">
                                     <ComboBoxItem Content="按球数" Tag="0" IsSelected="True"/>
                                     <ComboBoxItem Content="限时" Tag="1"/>
@@ -211,29 +123,14 @@
                                     <ComboBoxItem Content="仅向下" Tag="3"/>
                                 </ComboBox>
 
-                                <TextBlock Grid.Row="7" Text="随机种子" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
-                                           ToolTip="同样的种子 + 同样的距离/球数，球的位置序列一致，两轮之间才可比"/>
-                                <TextBox x:Name="TxtSeed" Grid.Row="7" Grid.Column="1" Text="20261020" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                                <TextBlock Grid.Row="7" Text="准星臂长 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                <TextBox x:Name="TxtCrossArm" Grid.Row="7" Grid.Column="1" Text="9" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
 
-                                <TextBlock Grid.Row="8" Text="CS2 灵敏度" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
-                                           ToolTip="只写进日志给 AI 做参考，本测试不会用它换算角度"/>
-                                <TextBox x:Name="TxtSens" Grid.Row="8" Grid.Column="1" Text="1.5" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                                <TextBlock Grid.Row="8" Text="准星间隙 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                <TextBox x:Name="TxtCrossGap" Grid.Row="8" Grid.Column="1" Text="3" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
 
-                                <TextBlock Grid.Row="9" Text="鼠标 DPI" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
-                                <TextBox x:Name="TxtDpi" Grid.Row="9" Grid.Column="1" Text="600" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
-
-                                <TextBlock Grid.Row="10" Text="采样设备" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
-                                           ToolTip="只统计这只鼠标的 WM_INPUT 包，避免别的 HID 集合混进来"/>
-                                <ComboBox x:Name="CmbDevice" Grid.Row="10" Grid.Column="1" Height="28" Margin="6,3,0,3"/>
-
-                                <TextBlock Grid.Row="11" Text="准星臂长 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
-                                <TextBox x:Name="TxtCrossArm" Grid.Row="11" Grid.Column="1" Text="9" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
-
-                                <TextBlock Grid.Row="12" Text="准星间隙 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
-                                <TextBox x:Name="TxtCrossGap" Grid.Row="12" Grid.Column="1" Text="3" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
-
-                                <TextBlock Grid.Row="13" Text="准星颜色" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
-                                <StackPanel Grid.Row="13" Grid.Column="1" Orientation="Horizontal" Margin="6,3,0,3">
+                                <TextBlock Grid.Row="9" Text="准星颜色" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                <StackPanel Grid.Row="9" Grid.Column="1" Orientation="Horizontal" Margin="6,3,0,3">
                                     <ComboBox x:Name="CmbCrossColor" Height="28" Width="64">
                                         <ComboBoxItem Content="白" Tag="#FFFFFFFF" IsSelected="True"/>
                                         <ComboBoxItem Content="青" Tag="#FF4CC2FF"/>
@@ -245,13 +142,34 @@
                                               IsChecked="True" ToolTip="臂长设 0 就只剩这个点"/>
                                 </StackPanel>
                             </Grid>
-                        </StackPanel>
-                    </Border>
 
-                    <Border Style="{StaticResource Card}" Margin="0,12,0,12">
-                        <StackPanel>
-                            <TextBlock Text="逐次结果" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <ListBox x:Name="ResultList" MaxHeight="340" Background="Transparent" BorderThickness="0"/>
+                            <Expander Header="高级设置" Margin="0,12,0,0" IsExpanded="False">
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="104"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Text="CS2 灵敏度" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                               ToolTip="保留灵敏度设置，本测试按像素摆球，不换算游戏角度。"/>
+                                    <TextBox x:Name="TxtSens" Grid.Row="0" Grid.Column="1" Text="1.5" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+
+                                    <TextBlock Grid.Row="1" Text="随机种子" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                               ToolTip="相同种子和设置会使用相同的小球位置序列。"/>
+                                    <TextBox x:Name="TxtSeed" Grid.Row="1" Grid.Column="1" Text="20261020" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+
+                                    <TextBlock Grid.Row="2" Text="采样设备" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                               ToolTip="只采样所选鼠标的输入，避免其他设备混入。"/>
+                                    <ComboBox x:Name="CmbDevice" Grid.Row="2" Grid.Column="1" Height="28" Margin="6,3,0,3"/>
+
+                                    <TextBlock Grid.Row="3" Text="鼠标 DPI" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="TxtDpi" Grid.Row="3" Grid.Column="1" Text="600" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                                </Grid>
+                            </Expander>
                         </StackPanel>
                     </Border>
                 </StackPanel>

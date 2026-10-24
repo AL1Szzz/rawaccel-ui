@@ -1,28 +1,18 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using RaCore;
-using RaCore.Model;
 
 namespace RaUI.View;
 
-/// <summary>
-/// Aim test page. It measures and logs; it does not judge. Tuning advice comes from the
-/// assistant that reads a log, and comes back as a validated JSON patch which this page
-/// previews and only then writes to the driver.
-/// </summary>
+/// <summary>Point-and-click ball practice with settings and a short score history.</summary>
 public partial class TestPage : UserControl
 {
     readonly List<Trial> trials = new();
-    AppState.RoundContext? frozen;   // context captured BEFORE the round, never after
+    AppState.RoundContext? frozen;
     FlickWindow? lastWindow;
     SessionRule? lastRule;
-    string logPath = "";
     string roundId = "";
-    string pendingPatchNote = "";    // stamped into the NEXT round so before/after is traceable
-    PatchResult? patch;
-    ProfileDto? beforePatch;         // for "revert"
 
     public TestPage()
     {
@@ -49,18 +39,7 @@ public partial class TestPage : UserControl
         {
             FillDevices();
             RefreshPlan();
-            ShowSummary();
-            FillRounds(selectNewest: true);
-            if (string.IsNullOrEmpty(roundId))
-            {
-                var latest = TestLog.LatestRound();
-                if (latest.Length > 0)
-                {
-                    roundId = System.IO.Path.GetFileNameWithoutExtension(latest);
-                    logPath = latest;
-                    LogInfo.Text = "上次运行的最新日志：" + latest;
-                }
-            }
+            FillRounds();
         };
         TxtDistance.TextChanged += (_, _) => RefreshPlan();
         TxtRadius.TextChanged += (_, _) => RefreshPlan();
@@ -68,8 +47,7 @@ public partial class TestPage : UserControl
         CmbMode.SelectionChanged += (_, _) => RefreshPlan();
         TxtTrials.TextChanged += (_, _) => RefreshPlan();
         TxtSeconds.TextChanged += (_, _) => RefreshPlan();
-        CmbA.SelectionChanged += (_, _) => ShowComparison();
-        CmbB.SelectionChanged += (_, _) => ShowComparison();
+        CmbDir.SelectionChanged += (_, _) => RefreshPlan();
     }
 
     static void SelectByTag(ComboBox box, string tag)
@@ -160,7 +138,7 @@ public partial class TestPage : UserControl
         string fit = DistancePx > maxUsable
             ? $"注意：{DistancePx:0}px 在 {w:0}×{h:0} 上经常放不下，球会被少放或直接提示没空间；建议不超过 {maxUsable:0}px。"
             : $"{DistancePx:0}px 在这个分辨率下放得开（可用半径上限约 {maxUsable:0}px）。";
-        PlanInfo.Text = $"{Balls} 个球同屏，{ModeLabel} · 点掉的跳到 {DistancePx:0}px 外 · 球半径 {RadiusPx:0}px · {DirName} · 种子 {Seed}。{fit}";
+        PlanInfo.Text = $"{Balls} 个球同屏，{ModeLabel} · 点掉的跳到 {DistancePx:0}px 外 · 球半径 {RadiusPx:0}px · {DirName}。{fit}";
     }
 
     // ---------- run ----------
@@ -172,15 +150,16 @@ public partial class TestPage : UserControl
     {
         RememberPrefs();
         trials.Clear();
-        ResultList.Items.Clear();
-        Flags.Text = "";
+        Summary.Text = "";
+        Summary.Visibility = Visibility.Collapsed;
+        lastWindow = null;
         lastRule = null;
         App.State.Speeds?.Clear();
 
-        // freeze what is actually in the driver BEFORE the round, while nothing has moved yet
+        // Keep the pre-round context for compatible background records; never write to the driver.
         frozen = null;
         try { frozen = App.State.CaptureRoundContext(DeviceId); }
-        catch (Exception e) { frozen = null; App.State.Status = "本轮起点没能读取：" + e.Message; }
+        catch (Exception e) { App.State.Status = "本轮起点没能读取：" + e.Message; }
 
         roundId = TestLog.NewRoundId();
         var cfg = new FlickWindow.Config
@@ -205,46 +184,49 @@ public partial class TestPage : UserControl
         };
 
         var w = new FlickWindow(cfg) { Owner = Window.GetWindow(this) };
-        w.TrialDone += t => Dispatcher.Invoke(() =>
-        {
-            trials.Add(t);
-            AddRow(t);
-            ShowSummary(w);
-        });
+        w.TrialDone += t => Dispatcher.Invoke(() => trials.Add(t));
         w.SessionDone += list => Dispatcher.Invoke(() =>
         {
-            foreach (var t in list) if (!trials.Contains(t)) trials.Add(t);
+            trials.Clear();
+            trials.AddRange(list);
             lastWindow = w;
             lastRule = w.Rule;
-            ShowSummary(w);
-            RefreshPlan();
-            WriteLog();
-            FillRounds(selectNewest: true);
+            int cleared = trials.Count(t => t.Hit);
+            double hitRate = trials.Count == 0 ? 0 : cleared * 100.0 / trials.Count;
+            Summary.Text = $"本次：点掉{cleared}球，命中{hitRate:0}%，用时{w.Rule.ElapsedMs / 1000.0:0.#}秒";
+            Summary.Visibility = Visibility.Visible;
         });
-        w.Closed += (_, _) => { try { Display.Restore(); } catch { } };
+        w.Closed += (_, _) =>
+        {
+            string displayStatus = w.DisplayWarning;
+            try
+            {
+                bool retrying = Display.HasPendingChange;
+                if (!Display.Restore())
+                    displayStatus = "分辨率还原失败，请到 Windows 显示设置手动改回。";
+                else if (retrying)
+                    displayStatus = "分辨率已在关闭窗口时重试还原。";
+            }
+            catch (Exception e)
+            {
+                displayStatus = "分辨率还原失败，请到 Windows 显示设置手动改回：" + e.Message;
+            }
+            try
+            {
+                RefreshPlan();
+                WriteLog();
+                FillRounds();
+            }
+            finally
+            {
+                if (displayStatus.Length > 0) App.State.Status = displayStatus;
+            }
+        };
         w.Show();
         w.Activate();
     }
 
-    void AddRow(Trial t)
-    {
-        var brush = new SolidColorBrush(t.Hit ? Color.FromRgb(0x6C, 0xCB, 0x5F) : Color.FromRgb(0xFF, 0x99, 0xA4));
-        ResultList.Items.Add(new TextBlock
-        {
-            Text = $"{trials.Count,3}  {(t.Hit ? "点掉" : (t.BallUnderCursor ? "偏了" : "空点"))}  距离 {t.DistancePx,5:0}px  " +
-                   $"径向 {t.RadialPct,+6:0.0}%  切向 {t.TangentialPx,+6:0.0}px  误差 {t.ErrorPx,4:0}px  " +
-                   $"{t.EndMs - t.StartMs,4:0}ms  " +
-                   (t.SampleCount > 0 ? $"{t.PeakSpeed,5:0.0}c/ms" : "  n/a") +
-                   (t.TelemetryTruncated ? " 截断" : ""),
-            Foreground = brush,
-            FontFamily = new FontFamily("Cascadia Mono, Consolas"),
-            FontSize = 12,
-            Margin = new Thickness(0, 1, 0, 1),
-        });
-        ResultList.ScrollIntoView(ResultList.Items[^1]);
-    }
-
-    // ---------- log ----------
+    // ---------- background log ----------
 
     void WriteLog()
     {
@@ -254,8 +236,7 @@ public partial class TestPage : UserControl
             var rec = App.State.Speeds;
             var sp = rec?.Percentiles(byComponent: frozen.Profile.speed_processor_args.whole == 0)
                      ?? (0, 0, 0, 0, 0, 0);
-            logPath = TestLog.RoundPath(roundId);
-            TestLog.Write(logPath, new RoundData
+            TestLog.Write(TestLog.RoundPath(roundId), new RoundData
             {
                 RoundId = roundId,
                 When = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
@@ -283,327 +264,33 @@ public partial class TestPage : UserControl
                 OutputSpeed = (sp.p50, sp.p75, sp.p95, sp.peak),
                 TelemetryNote = (lastWindow?.TelemetryNote ?? "") + (lastWindow?.DisplayWarning ?? "") +
                                 (lastWindow != null ? $" | end={lastWindow.EndReason}" : ""),
-                AppliedPatch = pendingPatchNote,
             });
-            LogInfo.Text = "本轮日志：" + logPath;
         }
         catch (Exception e)
         {
             App.State.Status = "写日志失败：" + e.Message;
-            LogInfo.Text = "写日志失败：" + e.Message;
         }
     }
 
-    void ShowSummary(FlickWindow? w = null)
+    // ---------- score history ----------
+
+    public sealed class ScoreRow
     {
-        if (trials.Count == 0)
+        public string Time { get; init; } = "";
+        public int Cleared { get; init; }
+        public string HitRate { get; init; } = "";
+    }
+
+    void FillRounds()
+    {
+        HistoryList.ItemsSource = TestLog.Rounds(80).Select(r => new ScoreRow
         {
-            Summary.Text = "还没测。点“开始全屏测试”，倒计时结束后连着点球。";
-            Flags.Text = "";
-            return;
-        }
-        var st = RoundStats.Compute(trials, RadiusPx, DistancePx);
-        var rule = w?.Rule ?? lastRule;
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"点掉 {st.BallsCleared} 球 / {st.Clicks} 次点击   命中 {st.HitRate:0.0}%   " +
-                      (st.KillsPerMinute > 0 ? $"{st.KillsPerMinute:0.0} 球/分钟   " : ""));
-        if (rule != null)
-            sb.AppendLine(rule.Mode == TestMode.Balls
-                ? $"目标 {rule.BallGoal} 球，还剩 {rule.RemainingBalls}，用时 {rule.ElapsedMs / 1000.0:0.0}s"
-                : $"限时 {rule.TimeLimitMs / 1000.0:0}s，已用 {rule.ElapsedMs / 1000.0:0.0}s，剩 {rule.RemainingMs / 1000.0:0.0}s");
-        sb.AppendLine($"径向中位 {st.RadialMedian:+0.0;-0.0}%（MAE {st.RadialMae:0.0}%、标准差 {st.RadialSd:0.0}%）   " +
-                      $"过头 {st.OvershootCount:0} / 正中 {st.OnTargetCount:0} / 不足 {st.UndershootCount:0}");
-        sb.Append($"切向中位 {st.TangMedianAbs:0.0}px   单发用时中位 {st.TimeMedian:0}ms   距离 {st.DistanceMin:0}~{st.DistanceMax:0}px   " +
-                  $"速度采到 {st.MeasuredCount}/{st.Count}" +
-                  (w != null && !string.IsNullOrEmpty(w.UsedResolution) ? $"   {w.UsedResolution}" : ""));
-        if (st.PrimaryCount > 0)
-            sb.Append($"\n开环：最远冲到 {st.MaxExtentMedian:0}%（飞过球面的 {st.OvershootCount2}/{st.PrimaryCount} 次）、" +
-                      $"入球用时 {Tt(st.TimeToTargetMedian, st.SessionMs)}；第一下停点 {st.PrimaryRadialMedian:+0.0;-0.0}%" +
-                      (st.HitExtentMedian > 0 && st.HitExtentMedian < 95 ? "（路径重建有丢失，最远%只能当下限）" : ""));
-        if (st.ArcRatioMedian > 0)
-            sb.Append($"\n轨迹：横向绕路 {st.LateralPathMedian:0}px = 瞄准距离的 {st.ArcRatioMedian:0.00} 倍（0=直线）、" +
-                      $"每发转向 {st.ReversalsMean:0.0} 次、绕回 {st.HookCount}/{st.PrimaryCount} 发" +
-                      (st.AsymN >= 8 ? $"、两轴偏向 e = {st.AsymMean:+0.000;-0.000} ± {st.AsymSem:0.000}（n={st.AsymN}）"
-                                     : "、两轴偏向判不了（斜向不足 8 发）"));
-        Summary.Text = sb.ToString();
-        Flags.Text = st.Notes.Count == 0 ? "本轮没有质量警告。"
-            : "注意点：\n  · " + string.Join("\n  · ", st.Notes.Select(n => n.Zh));
-    }
-
-    // ---------- round history / comparison ----------
-
-    /// <summary>A "duration" longer than the whole round is not a duration: it is an absolute
-    /// timestamp that leaked in through a clock mismatch (exactly what the five rounds written
-    /// 2026-10-21 17:55~18:16 contain - 421141ms of app uptime inside a 0.4s flick). Show a dash
-    /// rather than a number someone might read as a measurement.</summary>
-    static string Tt(double ms, double sessionMs) => ms <= 0 || ms > sessionMs ? "—" : $"{ms:0}ms";
-
-    /// <summary>One row of the history list. String properties because the GridView binds them.</summary>
-    public sealed class Row
-    {
-        public required RoundSummary S;
-        public string Time
-        {
-            get
-            {
-                // round-2026-10-21_16-57-28-366 -> 10-21 16:57:28 (the file name is the round START;
-                // S.When is when the log was written, i.e. the round END, and two rounds can share it)
-                var name = System.IO.Path.GetFileNameWithoutExtension(S.File);
-                if (name.Length < 25) return S.When;
-                string core = name[6..^4];                    // 2026-10-21_16-57-28 (19 chars)
-                return core.Length < 19 ? S.When : core[5..10] + " " + core[11..].Replace('-', ':');
-            }
-        }
-        public string Hit => $"{S.HitRate:0.0}%（{S.BallsCleared}/{S.Clicks}）";
-        public string Pace => S.KillsPerMinute > 0 ? $"{S.KillsPerMinute:0.0}" : "—";
-        public string Extent => S.MaxExtentMedian > 0 ? $"{S.MaxExtentMedian:0}%" : "—";
-        public string Sha => S.ConfigSha.Length > 6 ? S.ConfigSha[..6] : S.ConfigSha;
-        public string Warn
-        {
-            get
-            {
-                var bits = new List<string>();
-                int n = S.NotesZh.Count > 0 ? S.NotesZh.Count(x => x.Warn)
-                                            : S.Quality.Count(q => q.StartsWith("IMPLIANT"));
-                if (n > 0) bits.Add(n + "⚠");
-                if (!S.OpenLoopUsable) bits.Add("开环✗");
-                return string.Join(" ", bits);
-            }
-        }
-    }
-
-    RoundSummary? Picked() =>
-        (HistoryList.SelectedItem as Row)?.S
-        ?? TestLog.ReadSummary((CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "");
-
-    void FillRounds(bool selectNewest)
-    {
-        var rounds = TestLog.Rounds(80);
-
-        HistoryList.Items.Clear();
-        foreach (var r in rounds) HistoryList.Items.Add(new Row { S = r });
-        if (HistoryList.Items.Count > 0)
-            HistoryList.SelectedIndex = selectNewest ? 0 : Math.Max(0, HistoryList.Items.Count - 1);
-        GroupCompare.Text = string.Join("\n", History.CompareNewestTwo(rounds));
-
-        string keepA = (CmbA.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
-        string keepB = (CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
-        CmbA.Items.Clear();
-        CmbB.Items.Clear();
-        CmbA.Items.Add(new ComboBoxItem { Content = "（不选）", Tag = "" });
-        CmbB.Items.Add(new ComboBoxItem { Content = "（不选）", Tag = "" });
-        foreach (var r in rounds)
-        {
-            CmbA.Items.Add(new ComboBoxItem { Content = r.Label(), Tag = r.File });
-            CmbB.Items.Add(new ComboBoxItem { Content = r.Label(), Tag = r.File });
-        }
-        if (rounds.Count == 0) { Compare.Text = "logs\\ 里还没有日志。"; return; }
-
-        void Pick(ComboBox box, string keep, int fallbackIndex)
-        {
-            foreach (var i in box.Items.OfType<ComboBoxItem>())
-                if ((string)(i.Tag ?? "") == keep && keep.Length > 0) { i.IsSelected = true; return; }
-            box.SelectedIndex = fallbackIndex;
-        }
-        if (selectNewest)
-        {
-            // newest becomes B (the round to copy), the one before it becomes A (the baseline)
-            CmbB.SelectedIndex = 1;
-            CmbA.SelectedIndex = rounds.Count > 1 ? 2 : 0;
-        }
-        else
-        {
-            Pick(CmbA, keepA, rounds.Count > 1 ? 2 : 0);
-            Pick(CmbB, keepB, 1);
-        }
-    }
-
-    void OnHistorySelect(object sender, SelectionChangedEventArgs e)
-    {
-        if (HistoryDetail == null) return;   // fires during InitializeComponent
-        if (HistoryList.SelectedItem is not Row row) { HistoryDetail.Visibility = Visibility.Collapsed; return; }
-        var s = row.S;
-        HistoryDetail.Visibility = Visibility.Visible;
-
-        string cond = $"{s.Mode} · {s.DistancePx:0}px · {s.TargetCount}球 · 球半径 {s.RadiusPx:0}px";
-        DetailHead.Text = $"{row.Time}   {cond}\n" +
-                          $"点掉 {s.BallsCleared}/{s.Clicks}（{s.HitRate:0.0}%） · 节奏 {s.KillsPerMinute:0.0} 球/分 · " +
-                          $"径向中位 {s.RadialMedian:+0.0;-0.0}%（MAE {s.RadialMae:0.0}、sd {s.RadialSd:0.0}） · " +
-                          $"单发中位 {s.TimeMedian:0}ms";
-        if (!s.OpenLoopUsable)
-            DetailOpen.Text = "开环：这轮来自旧构建（路径重建有已知问题），开环数字不可用，别用它判断参数。";
-        else if (s.MaxExtentMedian > 0)
-            DetailOpen.Text = $"开环：甩动最远冲到 {s.MaxExtentMedian:0}%（>100% = 甩过头，这是判增益改动的第一尺子；" +
-                              $"{s.Overshoot2} 次整体飞出球面） · 入球用时中位 {Tt(s.TimeToTargetMedian, s.SessionMs)}";
-        else
-            DetailOpen.Text = "开环：这版日志没有开环字段。";
-
-        // path shape: the arc the endpoint numbers cannot see
-        if (s.ArcRatio > 0)
-            DetailShape.Text = $"轨迹形状：横向绕路是瞄准距离的 {s.ArcRatio:0.00} 倍（0 = 直线） · " +
-                               $"每发平均转向 {s.ReversalsMean:0.0} 次 · 绕出去又拉回 {s.HookCount} 发" +
-                               (s.AsymN >= 8
-                                    ? $" · 两轴偏向 e = {s.AsymMean:+0.000;-0.000} ± {s.AsymSem:0.000}（n={s.AsymN} 条斜向甩动；" +
-                                      "e>0 朝 Y 轴鼓，e<0 朝 X 轴鼓，0 = 无方向性）"
-                                    : " · 两轴偏向：斜向甩动不足 8 发，判不了");
-        else
-            DetailShape.Text = "轨迹形状：这版日志没有形状字段（新版跑一轮就有了）。";
-
-        var notes = new List<(string text, bool warn)>();
-        notes.AddRange(s.NotesZh);
-        if (notes.Count == 0 && s.Quality.Count > 0)
-        {
-            notes.AddRange(s.Quality.Select(q => ("（旧版日志只有英文）" + q, q.StartsWith("IMPLIANT"))));
-        }
-        NotesList.Children.Clear();
-        foreach (var n in notes)
-            NotesList.Children.Add(new TextBlock
-            {
-                Text = "· " + n.text,
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 12,
-                Margin = new Thickness(0, 2, 0, 2),
-                Foreground = new SolidColorBrush(n.warn ? Color.FromRgb(0xFF, 0xC2, 0x4C)
-                                                        : Color.FromRgb(0x9A, 0x9A, 0x9A)),
-            });
-        NotesExpander.Visibility = notes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        NotesHeader.Text = notes.Count == 0 ? "没有注意点" : $"注意点（{notes.Count}）";
-    }
-
-    void OnCleanup(object sender, RoutedEventArgs e)
-    {
-        var rounds = TestLog.Rounds(300);
-        if (rounds.Count == 0) { App.State.Status = "没有可清理的日志。"; return; }
-        var w = new CleanupWindow(rounds) { Owner = Window.GetWindow(this) };
-        w.Changed += () => { FillRounds(selectNewest: false); ShowSummary(); };
-        w.ShowDialog();
-    }
-
-    void OnUseBAsCurrent(object sender, RoutedEventArgs e)
-    {
-        var s = Picked();
-        if (s == null || !System.IO.File.Exists(s.File)) { App.State.Status = "先在列表里选一轮"; return; }
-        roundId = System.IO.Path.GetFileNameWithoutExtension(s.File);
-        logPath = s.File;
-        LogInfo.Text = "已把选中轮作为当前轮：" + System.IO.Path.GetFileName(s.File);
-        App.State.Status = "粘贴 AI 方案时会按这一轮校验 round";
-    }
-
-    void OnCopySelected(object sender, RoutedEventArgs e)
-    {
-        var s = Picked();
-        try
-        {
-            if (s == null || !System.IO.File.Exists(s.File)) { App.State.Status = "先在列表里选一轮日志"; return; }
-            Clipboard.SetText(System.IO.File.ReadAllText(s.File));
-            App.State.Status = "已复制 " + System.IO.Path.GetFileName(s.File) + "，直接贴给 AI";
-        }
-        catch (Exception ex) { App.State.Status = "复制失败：" + ex.Message; }
-    }
-
-    void OnOpenSelected(object sender, RoutedEventArgs e)
-    {
-        var s = Picked();
-        try
-        {
-            if (s == null || !System.IO.File.Exists(s.File)) { OpenDir(); return; }
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = s.File, UseShellExecute = true });
-        }
-        catch (Exception ex) { App.State.Status = "打不开日志：" + ex.Message; }
-    }
-
-    void OnOpenLogDir(object sender, RoutedEventArgs e)
-    {
-        try { OpenDir(); }
-        catch (Exception ex) { App.State.Status = "打不开目录：" + ex.Message; }
-    }
-
-    void OpenDir()
-    {
-        System.IO.Directory.CreateDirectory(TestLog.LogDir);
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = TestLog.LogDir, UseShellExecute = true });
-    }
-
-    void ShowComparison()
-    {
-        if (CmbA == null || CmbB == null || Compare == null) return;   // fires during InitializeComponent
-        var fa = (CmbA.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
-        var fb = (CmbB.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
-        if (fa.Length == 0 || fb.Length == 0 || fa == fb)
-        {
-            Compare.Text = "选两轮（A 当基准、B 当对比）就能看到差值。";
-            return;
-        }
-        var a = TestLog.ReadSummary(fa);
-        var b = TestLog.ReadSummary(fb);
-        if (a == null || b == null) { Compare.Text = "这两轮里没有可读的机读段（v3 之前的日志没有）。"; return; }
-        a.File = System.IO.Path.GetFileName(fa);
-        b.File = System.IO.Path.GetFileName(fb);
-        Compare.Text = string.Join("\n", TestLog.Compare(a, b));
-    }
-
-    // ---------- AI patch ----------
-
-    void OnPaste(object sender, RoutedEventArgs e)
-    {
-        try { TxtPatch.Text = Clipboard.GetText(); }
-        catch (Exception ex) { App.State.Status = "剪贴板读不了：" + ex.Message; }
-    }
-
-    void OnValidate(object sender, RoutedEventArgs e)
-    {
-        var p = App.State.SelectedProfile;
-        if (p == null) { PatchNote.Text = "先选一个 profile。"; return; }
-        patch = AiPatch.Parse(TxtPatch.Text, App.State.Doc, p.Name,
-                              string.IsNullOrEmpty(roundId) ? null : roundId);
-        BtnConfirm.IsEnabled = patch.Ok;
-        PatchDiff.Text = patch.Describe();
-        if (!patch.Ok)
-        {
-            BtnConfirm.IsEnabled = false;
-            App.State.Status = "方案被拒绝，驱动没有动";
-            PatchNote.Text = "被拒绝的原因见上面；驱动和配置文件都没动。";
-        }
-        else App.State.Status = "方案已通过校验，确认后才写驱动";
-    }
-
-    async void OnConfirm(object sender, RoutedEventArgs e)
-    {
-        var p = App.State.SelectedProfile;
-        if (patch == null || !patch.Ok || patch.PreviewProfile == null || p == null) return;
-        BtnConfirm.IsEnabled = false;
-        BtnRevert.IsEnabled = false;
-        beforePatch = p.Clone();
-
-        var res = await App.State.ApplyProfileAsync(patch.PreviewProfile, p.Name, TxtPatch.Text.Trim());
-        PatchNote.Text = res.Applied
-            ? "已写入驱动并回读一致。下一轮日志会写明“本轮之前应用了这些改动”。"
-            : "没写成，驱动保持原样：" + res.Message;
-        if (res.AuditFile != null) PatchNote.Text += "\n审计记录：" + res.AuditFile;
-        if (res.Applied)
-        {
-            pendingPatchNote = "round " + roundId + " 的方案已确认写入：\n" +
-                               string.Join("\n", patch.Changes.Select(c => "  " + c.Path + ": " + c.Old + " → " + c.New)) +
-                               (string.IsNullOrWhiteSpace(patch.Note) ? "" : "\n  note: " + patch.Note);
-        }
-        BtnRevert.IsEnabled = res.Applied && beforePatch != null;
-        BtnConfirm.IsEnabled = !res.Applied;
-    }
-
-    async void OnRevert(object sender, RoutedEventArgs e)
-    {
-        var p = App.State.SelectedProfile;
-        if (beforePatch == null || p == null) return;
-        BtnRevert.IsEnabled = false;
-        var res = await App.State.ApplyProfileAsync(beforePatch, beforePatch.Name, "(revert) 撤回上一次确认的改动");
-        PatchNote.Text = res.Applied
-            ? "已退回改动前的配置；下一轮日志会写明退回了什么。"
-            : "退回失败：" + res.Message;
-        if (res.Applied)
-        {
-            pendingPatchNote = "撤回了上一轮之后应用的改动，回到 profile " + beforePatch.Name + " 的旧参数";
-            beforePatch = null;
-        }
+            Time = DateTime.TryParseExact(System.IO.Path.GetFileNameWithoutExtension(r.File),
+                "'round-'yyyy-MM-dd_HH-mm-ss-fff", CultureInfo.InvariantCulture, DateTimeStyles.None, out var when)
+                ? when.ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : r.When,
+            Cleared = r.BallsCleared,
+            HitRate = $"{r.HitRate:0}%",
+        }).ToList();
     }
 
     // ---------- prefs ----------
