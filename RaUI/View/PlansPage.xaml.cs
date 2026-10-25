@@ -39,6 +39,11 @@ public partial class PlansPage : UserControl
             select ??= Picked?.Plan.Name;
             App.State.RefreshLiveSha();
             var list = App.State.ListPresets().OrderBy(p => Original(p) ? 0 : 1).ThenBy(p => p.Name).ToList();
+            var active = list.FirstOrDefault(p => p.Sha == App.State.LiveProfileSha);
+            // After a restart nothing has been clicked yet: highlight the plan that is ACTUALLY
+            // running, not row 1. Falling back to row 1 made a successful switch look like the
+            // machine had reverted it on boot.
+            select ??= active?.Name;
             var rows = list.Select(p =>
             {
                 var profile = Presets.TryLoad(p.File);
@@ -49,7 +54,6 @@ public partial class PlansPage : UserControl
             }).ToList();
             PlanList.ItemsSource = rows;
             PlanList.SelectedItem = rows.FirstOrDefault(r => r.Plan.Name == select) ?? rows.FirstOrDefault();
-            var active = list.FirstOrDefault(p => p.Sha == App.State.LiveProfileSha);
             Current.Text = !App.State.DriverReachable ? "驱动未连接" :
                 active == null ? "当前使用：自定义参数" : "当前使用：" + Label(active);
             EmptyNote.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
