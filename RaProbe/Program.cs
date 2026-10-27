@@ -26,6 +26,15 @@ internal static class Program
             return;
         }
 
+        // "How many mouse packets does Windows actually deliver?" - raw input, per device.
+        // Read-only, no focus, works while a game is in front. This is the only counter here
+        // that can separate a real polling-rate drop from system-level packet merging.
+        if (args.Contains("--hz"))
+        {
+            Environment.Exit(PollRate.Run(args));
+            return;
+        }
+
         // "Which curve is in the driver right now, in words." The read-only counterpart of the UI's
         // curve list, printed by name rather than by hex - the hex codes were the complaint.
         if (args.Contains("--curve-name"))
