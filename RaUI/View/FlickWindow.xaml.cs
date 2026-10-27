@@ -386,7 +386,9 @@ public partial class FlickWindow : Window
     void OnClosed(object sender, EventArgs e)
     {
         follow.Stop();
+        hud.Stop();                             // timed mode ends on the clock; a closed window must not keep a tick running
         countdownCancelled = true;
+        running = false;
         RestoreDisplay();                       // covers Alt+F4 / owner shutdown
         if (!sessionReported)
         {

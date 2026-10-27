@@ -29,6 +29,15 @@ public partial class SettingsPage : UserControl
         ChkWriteOnStart.IsChecked = cmd.Contains("--write");
         ChkWriteOnStart.IsEnabled = Autostart.IsEnabled;
 
+        // the login run resolves the settings file by itself unless the command pins it, and a
+        // wrong guess means it writes a different file than the one being edited here
+        string pinned = Autostart.SettingsPathOf(cmd.Length == 0 ? null : cmd);
+        TxtPath.Text += pinned == null
+            ? "\n登录自启：" + (Autostart.IsEnabled ? "命令里没有钉住设置文件路径，下次登录会重新猜一次" : "未注册")
+            : (string.Equals(pinned, App.State.SettingsPath, StringComparison.OrdinalIgnoreCase)
+                ? "\n登录自启用的就是这个文件：" + pinned
+                : $"\n*** 登录自启指向另一个文件：{pinned}，而这里编辑的是 {App.State.SettingsPath} ***");
+
         ChkTray.IsChecked = AppState.Prefs.TrayEnabled;
         ChkCloseTray.IsChecked = AppState.Prefs.CloseToTray;
         ChkStartHidden.IsChecked = AppState.Prefs.StartHidden;
@@ -154,19 +163,20 @@ public partial class SettingsPage : UserControl
     void OnAutostartChanged(object sender, RoutedEventArgs e)
     {
         if (ChkAutostart.IsChecked == true)
-            Autostart.Enable(ChkWriteOnStart.IsChecked == true, true);
+            Autostart.Enable(ChkWriteOnStart.IsChecked == true, true, App.State.SettingsPath);
         else
             Autostart.Disable();
         App.State.Status = Autostart.IsEnabled
             ? "已注册登录自启：" + Autostart.CurrentCommand()
             : "已移除登录自启（不影响驱动，驱动里的设置仍在）";
         ChkWriteOnStart.IsEnabled = Autostart.IsEnabled;
+        Refresh();
     }
 
     void OnWriteOnStartChanged(object sender, RoutedEventArgs e)
     {
         if (Autostart.IsEnabled)
-            Autostart.Enable(ChkWriteOnStart.IsChecked == true, true);
+            Autostart.Enable(ChkWriteOnStart.IsChecked == true, true, App.State.SettingsPath);
         Refresh();
     }
 

@@ -97,20 +97,62 @@ public sealed class AppState : INotifyPropertyChanged
 
     public bool CanWrite => DriverReachable && !Busy;
 
-    public bool IsDirty => Json.Serialize(doc) != Json.Serialize(saved);
+    // IsDirty used to serialize BOTH documents on every property notification (status bar, tray
+    // tip, chart, preset bar all read it), which is two full JSON writes per keystroke. Hash the
+    // draft once per change instead: same answer, no per-notification cost.
+    string docHash = "", savedHash = "";
+    public bool IsDirty => docHash != savedHash;
+
+    /// <summary>Call after assigning <see cref="saved"/> so both sides of the dirty check agree.</summary>
+    void SetSaved()
+    {
+        saved = doc.DeepCopy();
+        savedHash = ConfigHash.OfDoc(saved);
+        docHash = ConfigHash.OfDoc(doc);
+    }
+
+    /// <summary>
+    /// True when what is on screen was not read from the settings file: the file was missing or
+    /// unreadable AND the driver had nothing to fall back to, so the UI is showing synthesized
+    /// defaults. Login-time --write must never act on that - it would replace a real curve with a
+    /// default one after a transient file error.
+    /// </summary>
+    public bool LoadIsSynthetic { get; private set; }
 
     public CurveKind CurveKind
     {
         get => curveKind;
-        set { curveKind = value; Raise(); RebuildCurves(); }
+        set { if (curveKind == value) return; curveKind = value; Raise(); RebuildCurves(); }
     }
 
     // chart display scaling (does not affect the driver at all - mirrors the official
     // "Scale by DPI and Poll Rate" menu, which is display-only too)
     double chartDpi;
     int chartPollRate;
-    public double ChartDpi { get => chartDpi; set { chartDpi = value; Raise(); RebuildCurves(); } }
-    public int ChartPollRate { get => chartPollRate; set { chartPollRate = value; Raise(); RebuildCurves(); } }
+    public double ChartDpi { get => chartDpi; set { if (chartDpi == value) return; chartDpi = value; Raise(); RebuildCurves(); } }
+    public int ChartPollRate { get => chartPollRate; set { if (chartPollRate == value) return; chartPollRate = value; Raise(); RebuildCurves(); } }
+
+    /// <summary>
+    /// Both chart-scaling boxes are committed together, and each setter used to rebuild the whole
+    /// curve on its own. One rebuild per user action, and the prefs file is only rewritten when
+    /// the caller says this came from the UI rather than from loading prefs at startup.
+    /// </summary>
+    public void ApplyChartScale(double dpi, int pollRate, bool savePrefs = true)
+    {
+        bool changed = chartDpi != dpi || chartPollRate != pollRate;
+        chartDpi = dpi;
+        chartPollRate = pollRate;
+        if (savePrefs)
+        {
+            Prefs.ChartDpi = dpi;
+            Prefs.ChartPollRate = pollRate;
+            SavePrefs();
+        }
+        if (!changed) return;
+        Raise(nameof(ChartDpi));
+        Raise(nameof(ChartPollRate));
+        RebuildCurves();
+    }
 
     public List<CurveSeries> Series { get; private set; } = new();
     public string XAxisLabel { get; private set; } = "输入速度 (counts/ms)";
@@ -121,20 +163,35 @@ public sealed class AppState : INotifyPropertyChanged
     public List<ChartMarker> Markers { get; private set; } = new();
     public List<ChartZone> Zones { get; private set; } = new();
 
-    /// <summary>Re-evaluating the whole curve costs ~120ms, so the chart only rebuilds when the
-    /// document actually changed - not on every animation frame.</summary>
+    /// <summary>
+    /// Safety net only. Every edit path calls Touch(), which now refreshes the curve synchronously,
+    /// so the timer's job is just to catch a document changed from outside (ReloadFromDriver, a
+    /// preset applied elsewhere). Hashing one profile struct is microseconds; the old 500ms tick
+    /// serialized the whole document every time, forever, even with the window closed.
+    /// </summary>
     public void StartAutoRefresh()
     {
-        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        timer.Tick += (_, _) =>
-        {
-            var hash = ConfigHash.OfDoc(doc);
-            if (hash != lastCurveHash) RebuildCurves();
-        };
-        timer.Start();
+        if (refreshTimer != null) return;
+        refreshTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        refreshTimer.Tick += (_, _) => { if (!AutoRefreshPaused) RefreshCurveIfChanged(); };
+        refreshTimer.Start();
     }
 
-    string lastCurveHash = "";
+    System.Windows.Threading.DispatcherTimer? refreshTimer;
+
+    /// <summary>Set while the window is hidden or minimized: nobody is looking at the chart.</summary>
+    public bool AutoRefreshPaused { get; set; }
+
+    string curveKey = "";
+
+    /// <summary>What the drawn curves were built from: the selected profile plus the display axes.
+    /// Profile-level, not document-level, so editing a device entry cannot trigger a redraw.</summary>
+    string CurveKey() => selected == null ? "<none>" : $"{ConfigHash.Of(selected)}|{curveKind}|{chartDpi}|{chartPollRate}";
+
+    public void RefreshCurveIfChanged()
+    {
+        if (CurveKey() != curveKey) RebuildCurves();
+    }
 
     /// <summary>UI preferences (display scaling, game sens). Never written to the driver.</summary>
     public static UiPrefs Prefs { get; private set; } = UiPrefs.Load();
@@ -146,25 +203,36 @@ public sealed class AppState : INotifyPropertyChanged
     /// </summary>
     public string PhysicsReadout(ProfileDto p)
     {
-        double dpi = Prefs.MouseDpi, sens = Prefs.GameSensitivity, poll = Prefs.ChartPollRate;
+        double dpi = Prefs.MouseDpi, sens = Prefs.GameSensitivity, poll = chartPollRate;
         if (dpi <= 0 || sens <= 0) return "填上鼠标 DPI 和游戏灵敏度后，这里会给出 cm/s 与 °/s 的对照。";
 
+        // What unit the curve's own x axis is in depends on DPI normalization: with a device DPI
+        // filled in, the driver pre-divides by it, so the internal speed is already in/s against a
+        // 1000-dpi reference. Dividing that by the real DPI again reported the wrong cm/s for every
+        // DPI except 1000. Convert to counts/ms first, then to physical units once.
+        bool normalized = doc.DefaultDeviceConfig.Dpi > 0;
+        double CountsPerMs(double internalV) => normalized ? internalV * dpi / 1000.0 : internalV;
         double CmsToCms(double countsPerMs) => countsPerMs * 2.54 * 1000 / dpi;         // cm/s
         double CmsToDeg(double countsPerMs) => countsPerMs * SourceAim.DegreesPerCount(sens) * 1000;
 
         var ax = Analyze(p, true);
         var ay = Analyze(p, false);
         double perPacket = poll > 0 ? 1000.0 / poll : 1.0;
+        double axCpm = CountsPerMs(ax.threshold), ayCpm = CountsPerMs(ay.threshold);
 
         var sb = new System.Text.StringBuilder();
         sb.Append($"eDPI {dpi * sens:0} · {SourceAim.CmPer360(sens, dpi):0.0} cm/360（{SourceAim.CmPer360(sens, dpi) / 2:0.0} cm/180°）");
-        sb.Append($"   |   X 阈值 {ax.threshold:0.00} c/ms = {CmsToCms(ax.threshold):0} cm/s = {CmsToDeg(ax.threshold):0} °/s" +
-                  $"（{poll:0}Hz 下每包 {ax.threshold * perPacket:0.0} counts = {ax.threshold * perPacket / dpi * 25.4:0.00} mm）");
+        sb.Append($"   |   X 阈值 {ax.threshold:0.00} {(normalized ? "in/s" : "c/ms")} = {axCpm:0.00} c/ms = {CmsToCms(axCpm):0} cm/s = {CmsToDeg(axCpm):0} °/s" +
+                  $"（{poll:0}Hz 下每包 {axCpm * perPacket:0.0} counts = {axCpm * perPacket / dpi * 25.4:0.00} mm）");
         if (!double.IsInfinity(ax.capSpeed))
-            sb.Append($"，封顶于 {CmsToCms(ax.capSpeed):0} cm/s，峰值有效灵敏度 {sens * ax.capValue:0.00}");
-        sb.Append($"\nY 阈值 {ay.threshold:0.00} c/ms = {CmsToCms(ay.threshold):0} cm/s = {CmsToDeg(ay.threshold):0} °/s");
+        {
+            double capCpm = CountsPerMs(ax.capSpeed);
+            sb.Append($"，封顶于 {CmsToCms(capCpm):0} cm/s，峰值有效灵敏度 {sens * ax.capValue:0.00}");
+        }
+        sb.Append($"\nY 阈值 {ay.threshold:0.00} {(normalized ? "in/s" : "c/ms")} = {ayCpm:0.00} c/ms = {CmsToCms(ayCpm):0} cm/s = {CmsToDeg(ayCpm):0} °/s");
         if (!double.IsInfinity(ay.capSpeed))
-            sb.Append($"，封顶于 {CmsToCms(ay.capSpeed):0} cm/s，峰值有效灵敏度 {sens * ay.capValue:0.00}");
+            sb.Append($"，封顶于 {CmsToCms(CountsPerMs(ay.capSpeed)):0} cm/s，峰值有效灵敏度 {sens * ay.capValue:0.00}");
+        if (normalized) sb.Append($"\n（DPI 归一化开着：曲线横轴本身已是 in/s，上面按设备 DPI {doc.DefaultDeviceConfig.Dpi} 换算回 counts）");
         return sb.ToString();
     }
 
@@ -250,11 +318,14 @@ public sealed class AppState : INotifyPropertyChanged
 
     void Raise([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new(n));
 
-    /// <summary>Call after mutating the document in place so IsDirty/status refresh.</summary>
+    /// <summary>Call after mutating the document in place. Refreshes the dirty flag and, when the
+    /// selected profile actually changed, redraws the chart right away instead of on the next tick.</summary>
     public void Touch()
     {
+        docHash = ConfigHash.OfDoc(doc);
         Raise(nameof(IsDirty));
         Raise(nameof(Doc));
+        RefreshCurveIfChanged();
     }
 
     /// <summary>Where acceleration starts / stops rising. Delegates to RaCore so the
@@ -271,18 +342,19 @@ public sealed class AppState : INotifyPropertyChanged
     {
         ProbeDriver();
 
-        bool loadedFile = false;
+        bool loadedFile = false, parseFailed = false;
         try
         {
             if (File.Exists(SettingsPath))
             {
                 Doc = Json.Deserialize(File.ReadAllText(SettingsPath));
                 loadedFile = true;
-                saved = doc.DeepCopy();
+                SetSaved();
             }
         }
         catch (Exception e)
         {
+            parseFailed = true;
             Status = "读取 settings.json 失败：" + e.Message;
         }
 
@@ -294,22 +366,28 @@ public sealed class AppState : INotifyPropertyChanged
                 if (DriverReachable)
                 {
                     Doc = Convert4.ReadBlob(RaDevice.Read());
-                    saved = doc.DeepCopy();
-                    Status = "settings.json 不存在，已载入驱动当前活动配置";
+                    SetSaved();
+                    Status = "settings.json 不存在或读不出来，已载入驱动当前活动配置（界面里的改动不会自动写文件）";
                 }
                 else
                 {
                     Doc = OfflineDefaults();
-                    saved = doc.DeepCopy();
+                    SetSaved();
+                    Status = "读不到设置文件、驱动也没连上：下面显示的是默认参数，不是当前生效的曲线";
                 }
             }
             catch (Exception e)
             {
                 Doc = OfflineDefaults();
-                saved = doc.DeepCopy();
-                Status = "读取驱动失败：" + e.Message;
+                SetSaved();
+                Status = "读取驱动失败：" + e.Message + "（显示的是默认参数，不是生效值）";
             }
         }
+
+        // A file we could not read, or a driver holding nothing, means what is on screen came from
+        // us and not from the user. Login --write checks this: after one transient read error it
+        // must not overwrite a working curve with the built-in default one.
+        LoadIsSynthetic = parseFailed || (!loadedFile && (!DriverReachable || doc.Profiles.Count == 0));
 
         SyncProfileList();
         RebuildCurves();
@@ -388,8 +466,9 @@ public sealed class AppState : INotifyPropertyChanged
                 File.Move(temp, SettingsPath, true);
             }
             finally { if (File.Exists(temp)) File.Delete(temp); }
-            saved = doc.DeepCopy();
+            SetSaved();
             Raise(nameof(IsDirty));
+            LoadIsSynthetic = false;            // the file on disk is now this document
             Status = "设置已保存";
             return true;
         }
@@ -405,7 +484,7 @@ public sealed class AppState : INotifyPropertyChanged
         try
         {
             Doc = Convert4.ReadBlob(RaDevice.Read());
-            saved = doc.DeepCopy();
+            SetSaved();
             SyncProfileList();
             RebuildCurves();
             Raise(nameof(IsDirty));
@@ -473,10 +552,17 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     /// <summary>Writes the whole document to the driver. The driver enforces a 1s throttle.</summary>
-    public async Task<bool> WriteToDriverAsync()
+    /// <param name="fromLogon">Login autostart path: refuses to act on a document that was not read
+    /// from the user's own file, so one bad read cannot swap in the built-in default curve.</param>
+    public async Task<bool> WriteToDriverAsync(bool fromLogon = false)
     {
         if (Busy) { Status = "请等待上一次应用结束"; return false; }
         if (!DriverReachable) { Status = "驱动不可用，无法应用"; return false; }
+        if (fromLogon && LoadIsSynthetic)
+        {
+            Status = "登录时没有自动写入：设置文件读不出来或驱动是空的，界面里是默认参数，写下去等于换了一套你没选过的曲线";
+            return false;
+        }
         var target = doc.DeepCopy(); // Never compare a live editable document after an await.
         byte[] before = null;
         bool attempted = false;
@@ -754,7 +840,7 @@ public sealed class AppState : INotifyPropertyChanged
             if (!double.IsNaN(zHi)) Zones.Add(new ChartZone(zHi, maxAxis, "已封顶", ZoneTint(0x42)));
         }
 
-        lastCurveHash = ConfigHash.OfDoc(doc);
+        curveKey = CurveKey();
 
         Raise(nameof(Series));
         Raise(nameof(Zones));

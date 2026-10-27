@@ -40,6 +40,7 @@ echo.
 echo Done: app\RaUI.exe  +  app\RaProbe.exe
 echo   offline checks:  app\RaProbe.exe --selftest
 echo   which curve:     app\RaProbe.exe --curve-name
+echo   mouse packets:   app\RaProbe.exe --hz 15
 echo   tray check:      app\RaUI.exe --dump-tray
 echo   icon check:      app\RaUI.exe --dump-ico RaUI\raui.ico
 echo   ui render:       app\RaUI.exe --dump-ui (offscreen, no focus change)

@@ -18,6 +18,7 @@ public partial class CurvePage : UserControl
     static readonly string[] CapModes = { "in_out", "input", "output" };
 
     readonly List<FrameworkElement> editors = new();
+    readonly Dictionary<TextBox, string> shownText = new();
     bool suppress;
 
     public CurvePage()
@@ -27,8 +28,8 @@ public partial class CurvePage : UserControl
 
         TxtChartDpi.Text = AppState.Prefs.ChartDpi.ToString("0");
         TxtChartPoll.Text = AppState.Prefs.ChartPollRate.ToString();
-        App.State.ChartDpi = AppState.Prefs.ChartDpi;
-        App.State.ChartPollRate = AppState.Prefs.ChartPollRate;
+        // one rebuild for the two boxes, and loading prefs must not rewrite the prefs file
+        App.State.ApplyChartScale(AppState.Prefs.ChartDpi, AppState.Prefs.ChartPollRate, savePrefs: false);
 
         Chart.SetBinding(Controls.CurveChart.SeriesProperty,
             new System.Windows.Data.Binding(nameof(AppState.Series)) { Source = App.State });
@@ -217,6 +218,10 @@ public partial class CurvePage : UserControl
                 void CommitIt()
                 {
                     if (suppress || App.State.Busy || App.State.SelectedProfile == null) return;
+                    // An untouched box must not commit. The display is rounded, so simply focusing a
+                    // field and clicking away used to overwrite a long value with its rounded form
+                    // (0.123456789 -> 0.123457) and mark the whole document dirty.
+                    if (shownText.TryGetValue(tb, out var shown) && tb.Text.Trim() == shown) return;
                     // never let NaN / Infinity / 1e300 reach the driver: it precomputes
                     // logarithms and roots from these and the mouse can become unusable
                     if (double.TryParse(tb.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
@@ -245,8 +250,18 @@ public partial class CurvePage : UserControl
     {
         if (suppress || App.State.Busy || App.State.SelectedProfile == null) return;
         try { apply(); } catch { /* keep the old value on a bad assignment */ }
+        // Touch() already redraws the chart when the selected profile actually changed; calling
+        // RebuildCurves here too evaluated the whole curve a second time per keystroke.
         App.State.Touch();
-        App.State.RebuildCurves();
+    }
+
+    /// <summary>Shortest text that still parses back to the same double, so a round trip through
+    /// the boxes can never quietly round a parameter.</summary>
+    static string Format(double v)
+    {
+        string s = v.ToString("0.##########", CultureInfo.InvariantCulture);
+        if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var back) && back == v) return s;
+        return v.ToString("R", CultureInfo.InvariantCulture);
     }
 
     void RefreshValues()
@@ -264,8 +279,9 @@ public partial class CurvePage : UserControl
                 switch (e)
                 {
                     case TextBox tb:
-                        if (!HasFocus(tb))
-                            tb.Text = Convert.ToDouble(v, CultureInfo.InvariantCulture).ToString("0.######", CultureInfo.InvariantCulture);
+                        string text = v is double dv ? Format(dv) : Convert.ToString(v, CultureInfo.InvariantCulture) ?? "";
+                        shownText[tb] = text;
+                        if (!HasFocus(tb)) tb.Text = text;
                         break;
                     case ComboBox cb:
                         if (v is string s && cb.SelectedItem as string != s) cb.SelectedItem = s;
@@ -291,18 +307,23 @@ public partial class CurvePage : UserControl
     void OnKind(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
-        App.State.CurveKind = RbSens.IsChecked == true ? CurveKind.Sensitivity
-                             : RbGain.IsChecked == true ? CurveKind.Gain : CurveKind.Sensitivity;
-        App.State.RebuildCurves();
+        // the setter rebuilds once, and only when the kind actually changed
+        App.State.CurveKind = RbGain.IsChecked == true ? CurveKind.Gain : CurveKind.Sensitivity;
     }
 
     void OnChartScale(object sender, RoutedEventArgs e)
     {
-        if (double.TryParse(TxtChartDpi.Text, out var dpi) && dpi >= 0) App.State.ChartDpi = dpi;
-        if (int.TryParse(TxtChartPoll.Text, out var pr) && pr >= 0) App.State.ChartPollRate = pr;
-        AppState.Prefs.ChartDpi = App.State.ChartDpi;
-        AppState.Prefs.ChartPollRate = App.State.ChartPollRate;
-        AppState.SavePrefs();
-        App.State.RebuildCurves();
+        if (!double.TryParse(TxtChartDpi.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var dpi) || dpi < 0)
+        {
+            App.State.Status = "图表 DPI 只接受 0 或正数（0 = 横轴按 counts/ms），这次改动没有生效";
+            return;
+        }
+        if (!int.TryParse(TxtChartPoll.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pr) || pr < 0)
+        {
+            App.State.Status = "图表轮询率只接受 0 或正整数，这次改动没有生效";
+            return;
+        }
+        // both boxes belong to one action: ApplyChartScale saves the prefs once and redraws once
+        App.State.ApplyChartScale(dpi, pr);
     }
 }

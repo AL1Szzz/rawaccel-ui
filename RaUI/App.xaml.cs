@@ -112,7 +112,7 @@ public partial class App : Application
         if (System.Array.Exists(e.Args, a => a == "--autostart-enable"))
         {
             Headless = true;
-            Autostart.Enable(writeAtLogon: true, minimized: true);
+            Autostart.Enable(writeAtLogon: true, minimized: true, settingsPath: State.SettingsPath);
             Say("已注册登录自启: " + Autostart.CurrentCommand());
             Say("  程序路径存在: " + (System.IO.File.Exists(Autostart.ExePath) ? "是" : "否！自启会失败"));
             if (!System.IO.File.Exists(Autostart.ExePath)) Autostart.Disable();
@@ -150,7 +150,10 @@ public partial class App : Application
         }
         else if (minimized) State.Status = "以最小化启动（托盘图标已关闭，关掉窗口就退出）";
 
-        if (writeOnStart) _ = State.WriteToDriverAsync();
+        // Login writes go through the same safe path as the button, but with the extra guard:
+        // if the settings file could not be read, what the UI is holding is our own default
+        // document and writing it would replace a working curve.
+        if (writeOnStart) _ = State.WriteToDriverAsync(fromLogon: true);
     }
 
     void DumpTray()
@@ -194,13 +197,17 @@ public partial class App : Application
         Say("登录前状态: " + (before == null ? "未注册自启" : "已注册: " + before));
         Say("本程序路径: " + Autostart.ExePath + (System.IO.File.Exists(Autostart.ExePath) ? " (存在)" : " (不存在！自启会失败)"));
 
-        Autostart.Enable(writeAtLogon: true, minimized: true);
+        Autostart.Enable(writeAtLogon: true, minimized: true, settingsPath: State.SettingsPath);
         string after = Autostart.CurrentCommand();
         Say("Enable 之后: " + after);
         Say("  IsEnabled = " + Autostart.IsEnabled);
         Say("  含 --minimized = " + (after?.Contains("--minimized") ?? false));
         Say("  含 --write = " + (after?.Contains("--write") ?? false));
         Say("  指向自身 = " + (after?.Contains(Autostart.ExePath) ?? false));
+        string pinned = Autostart.SettingsPathOf(after);
+        Say("  登录时会用哪个设置文件 = " + (pinned ?? "(没钉死，下次登录重新猜路径)") +
+            (pinned != null && pinned == State.SettingsPath ? "  · 与当前一致 (OK)" :
+             pinned != null ? $"  *** 与当前 {State.SettingsPath} 不一致 ***" : ""));
 
         Autostart.Disable();
         Say("Disable 之后: " + (Autostart.CurrentCommand() ?? "已移除 (OK)"));

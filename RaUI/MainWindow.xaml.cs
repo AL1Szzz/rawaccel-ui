@@ -40,8 +40,15 @@ public partial class MainWindow : Window
                 ((Border)Content).Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x1F));
             }
             if (!App.Headless) App.State.StartAutoRefresh();
+            SyncRefreshPause();
+            IsVisibleChanged += (_, _) => SyncRefreshPause();
+            StateChanged += (_, _) => SyncRefreshPause();
         };
     }
+
+    /// <summary>Hidden to the tray or minimized: stop hashing the document. The chart is not being
+    /// looked at, and this process is expected to sit in the tray for days.</summary>
+    void SyncRefreshPause() => App.State.AutoRefreshPaused = !(IsVisible && WindowState != WindowState.Minimized);
 
     void SyncStatus(string prop)
     {

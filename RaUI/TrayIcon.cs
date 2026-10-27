@@ -73,7 +73,7 @@ public sealed class TrayIcon : IDisposable
     readonly IntPtr hIcon;
     readonly uint taskbarCreated;
     readonly ContextMenu menu;
-    bool added, hidden;
+    bool added, hidden, disposed;
 
     public const uint IconId = 0x5241;          // "RA"
     public string LastError { get; private set; } = "";
@@ -96,11 +96,10 @@ public sealed class TrayIcon : IDisposable
         source.AddHook(WndProc);
 
         window.Closing += OnWindowClosing;
-        state.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName is nameof(AppState.Status) or nameof(AppState.DriverInfo) or "IsDirty")
-                DispatcherInvoke(UpdateTip);
-        };
+        // Named handler, unsubscribed in Dispose: the tray can be turned off and back on from the
+        // settings page, and an anonymous lambda here kept every discarded TrayIcon alive and
+        // recomputing its tooltip on every status change, for the rest of the session.
+        state.PropertyChanged += OnStateChanged;
 
         if (!Add()) { /* Add() already wrote the reason into LastError */ }
         else UpdateTip();
@@ -420,8 +419,17 @@ public sealed class TrayIcon : IDisposable
 
     [DllImport("user32.dll")] static extern IntPtr CreateIconIndirect(ref ICONINFO icon);
 
+    void OnStateChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(AppState.Status) or nameof(AppState.DriverInfo) or nameof(AppState.IsDirty))
+            DispatcherInvoke(UpdateTip);
+    }
+
     public void Dispose()
     {
+        if (disposed) return;                 // 退出路径和「关闭托盘」都会走到这里，只清一次
+        disposed = true;
+
         if (added)
         {
             var d = Data(0);
@@ -429,6 +437,7 @@ public sealed class TrayIcon : IDisposable
             added = false;
         }
         window.Closing -= OnWindowClosing;
+        state.PropertyChanged -= OnStateChanged;
         source?.RemoveHook(WndProc);
         if (hIcon != IntPtr.Zero) DestroyIcon(hIcon);
     }
