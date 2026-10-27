@@ -93,6 +93,19 @@ public static class DeviceEnum
         }).ToList();
     }
 
+    /// <summary>
+    /// Raw-input handle -> (device id, friendly name) for every mouse collection present right now.
+    /// WM_INPUT only carries the handle, so anything that counts packets per device needs this map;
+    /// ListMice() collapses collections by id and loses the handle.
+    /// </summary>
+    public static Dictionary<IntPtr, (string id, string name)> Handles()
+    {
+        var map = new Dictionary<IntPtr, (string, string)>();
+        foreach (var (handle, id, _) in EnumerateHandles())
+            map[handle] = (id, ReadHidName(handle));
+        return map;
+    }
+
     /// <summary>Step-by-step trace, for diagnosing an empty list.</summary>
     public static List<string> Diagnose()
     {

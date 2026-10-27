@@ -180,6 +180,66 @@ public static class SelfTests
         time.Devices.Add(new DeviceDto { Id = "HID\\VID_1234&PID_0002", Name = "m2", Profile = "default",
             Config = new DeviceConfigDto { Dpi = 600, MinimumTime = 5, MaximumTime = 1 } });
         Check(Json.Validate(time).Any(p => p.Contains("反了")), "inverted time clamp is caught");
+
+        Console.WriteLine("   -- parity with upstream rawaccel-validate.hpp --");
+
+        // The class of bug that actually costs a mouse: the driver takes these numbers, so a value
+        // it rejects (or that multiplies the pointer by zero) must never leave user space.
+        var out0 = BaseDoc(); out0.Profiles[0].OutputDpi = 0;
+        Check(Json.Validate(out0).Any(p => p.Contains("输出 DPI")), "output DPI 0 is caught (it zeroed every movement)");
+        var yx0 = BaseDoc(); yx0.Profiles[0].YxRatio = 0;
+        Check(Json.Validate(yx0).Any(p => p.Contains("Y/X")), "Y/X ratio 0 is caught");
+        var lr0 = BaseDoc(); lr0.Profiles[0].LrRatio = 0;
+        Check(Json.Validate(lr0).Any(p => p.Contains("L/R")), "L/R ratio 0 is caught");
+        var dom0 = BaseDoc(); dom0.Profiles[0].Domain.Y = 0;
+        Check(Json.Validate(dom0).Any(p => p.Contains("域权重")), "a zero domain weight is caught");
+        var lp0 = BaseDoc(); lp0.Profiles[0].Speed.LpNorm = 0;
+        Check(Json.Validate(lp0).Any(p => p.Contains("lpNorm")), "lpNorm 0 is caught");
+        var snap60 = BaseDoc(); snap60.Profiles[0].Snap = 60;
+        Check(Json.Validate(snap60).Any(p => p.Contains("角度吸附")), "snap above the driver's 45 degrees is caught");
+        var exp1 = BaseDoc(); exp1.Profiles[0].X.ExponentClassic = 1;
+        Check(Json.Validate(exp1).Any(p => p.Contains("exponentClassic")), "classic exponent 1 is caught");
+        var acc0 = BaseDoc(); acc0.Profiles[0].X.Acceleration = 0;
+        Check(Json.Validate(acc0).Any(p => p.Contains("acceleration")), "acceleration 0 is caught (the driver requires > 0)");
+        var capUnderOffset = BaseDoc();
+        capUnderOffset.Profiles[0].X.InputOffset = 5;
+        capUnderOffset.Profiles[0].X.Cap.X = 2;
+        capUnderOffset.Profiles[0].X.CapMode = "in_out";
+        Check(Json.Validate(capUnderOffset).Any(p => p.Contains("低于输入阈值")), "a cap below the offset (empty accel band) is caught");
+        var lutShort = BaseDoc();
+        lutShort.Profiles[0].X.Mode = "lut";
+        lutShort.Profiles[0].X.Data.Clear();
+        Check(Json.Validate(lutShort).Any(p => p.Contains("lut")), "a lut mode with no points is caught");
+        var longName = BaseDoc(); longName.Profiles[0].Name = new string('n', 300);
+        Check(Json.Validate(longName).Any(p => p.Contains("截断")), "a profile name the driver field would cut is caught");
+        var zeroTime = BaseDoc();
+        zeroTime.Devices.Add(new DeviceDto { Id = "HID\\VID_1234&PID_0003", Name = "m3", Profile = "default",
+            Config = new DeviceConfigDto { MinimumTime = 0 } });
+        Check(Json.Validate(zeroTime).Any(p => p.Contains("minimumTime")), "minimumTime 0 is caught on a device");
+        var defClamp = BaseDoc();
+        defClamp.DefaultDeviceConfig.MinimumTime = 5; defClamp.DefaultDeviceConfig.MaximumTime = 1;
+        Check(Json.Validate(defClamp).Any(p => p.Contains("默认")), "an inverted default clamp is caught");
+
+        // whole mode: upstream valid() does not look at the Y axis at all, so neither do we -
+        // blocking it would reject a file the official GUI writes without complaint.
+        var wholeIgnoresY = BaseDoc();
+        wholeIgnoresY.Profiles[0].Speed.Whole = true;
+        wholeIgnoresY.Profiles[0].Y.Acceleration = 0;
+        wholeIgnoresY.Profiles[0].Y.ExponentClassic = 1;
+        Check(!Json.Validate(wholeIgnoresY).Any(p => p.Contains(".Y.")),
+            "unused Y parameters are not policed in whole mode (matches the driver)");
+
+        // A guard is only worth having if it still says yes to the file this machine actually runs.
+        var live = SettingsFile.Find();
+        if (live != null)
+        {
+            var onDisk = Json.Deserialize(File.ReadAllText(live));
+            var problems = Json.Validate(onDisk);
+            Check(problems.Count == 0, $"the settings.json in use still passes: {string.Join("；", problems)}");
+            var o = Modifier.EvaluateOnce(Convert4.ToStruct(onDisk.Profiles[0]), new vec2d { x = 4, y = 4 }, 0.5);
+            Check(o.x != 0 || o.y != 0, "and a real movement through it still produces output");
+        }
+        else Check(true, "no settings.json on this machine: live-file check skipped");
     }
 
     // ---------- D ----------

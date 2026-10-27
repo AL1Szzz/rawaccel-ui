@@ -407,10 +407,19 @@ public static class Convert4
 
 public static class Json
 {
+    static readonly string[] KnownModes = { "classic", "jump", "natural", "synchronous", "power", "lut", "noaccel" };
+    static readonly string[] KnownCaps = { "in_out", "input", "output" };
+
     /// <summary>
     /// Guard for anything heading to the driver: the kernel precomputes logs and roots from
     /// these numbers, so NaN/Infinity/absurd values must be stopped in user space.
     /// Returns a list of problems; empty means the document is safe to serialize.
+    ///
+    /// The range checks mirror upstream rawaccel-validate.hpp (check_accel / valid(profile) /
+    /// valid(device_settings)) rule for rule, because that is what the official GUI refuses to
+    /// write: a value we let through but the driver rejects leaves a settings.json that the
+    /// official tool can no longer open, and the read-back check cannot see it - the driver
+    /// happily accepts bytes that then produce a dead or zeroed pointer.
     /// </summary>
     public static List<string> Validate(RootDto r)
     {
@@ -421,12 +430,23 @@ public static class Json
             else if (double.IsInfinity(v)) bad.Add($"{where} 是无穷大");
             else if (Math.Abs(v) > max) bad.Add($"{where} = {v} 超出合理范围（|值| ≤ {max}）");
         }
-        void Accel(string axis, AccelDto a)
+        bool Ok(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+        void Pos(string where, double v)
         {
-            if (!new[] { "classic", "jump", "natural", "synchronous", "power", "lut", "noaccel" }.Contains(a.Mode))
+            if (Ok(v) && v <= 0) bad.Add($"{where} = {v}：驱动要求大于 0");
+        }
+        bool Is(string s, params string[] any) => any.Any(a => s.Equals(a, StringComparison.OrdinalIgnoreCase));
+
+        // enforce: upstream valid() only checks the Y axis when the profile is by-component,
+        // because in whole mode the Y parameters never reach the driver. Following it exactly
+        // means we never block a file the official GUI would write without complaint.
+        void Accel(string axis, AccelDto a, bool enforce = true)
+        {
+            if (!KnownModes.Contains(a.Mode, StringComparer.OrdinalIgnoreCase))
                 bad.Add($"{axis}.mode “{a.Mode}” 不是已知模式");
-            if (!new[] { "in_out", "input", "output" }.Contains(a.CapMode))
+            if (!KnownCaps.Contains(a.CapMode, StringComparer.OrdinalIgnoreCase))
                 bad.Add($"{axis}.Cap mode “{a.CapMode}” 不是已知封顶方式");
+
             Num($"{axis}.inputOffset", a.InputOffset, 1000);
             Num($"{axis}.outputOffset", a.OutputOffset, 1000);
             Num($"{axis}.acceleration", a.Acceleration, 1000);
@@ -441,6 +461,41 @@ public static class Json
             Num($"{axis}.smooth", a.Smooth, 1);
             Num($"{axis}.Cap.x", a.Cap.X, 10000);
             Num($"{axis}.Cap.y", a.Cap.Y, 1000);
+
+            if (enforce)
+            {
+                // upstream check_accel: the driver feeds these straight into log()/pow()/division,
+                // so a 0 or a negative is not "a flat curve", it is a NaN curve or a rejected write.
+                Pos($"{axis}.acceleration", a.Acceleration);
+                Pos($"{axis}.scale", a.Scale);
+                Pos($"{axis}.gamma", a.Gamma);
+                Pos($"{axis}.decayRate", a.DecayRate);
+                Pos($"{axis}.limit", a.Limit);
+                Pos($"{axis}.syncSpeed", a.SyncSpeed);
+                Pos($"{axis}.exponentPower", a.ExponentPower);
+                if (Ok(a.Motivity) && a.Motivity <= 1) bad.Add($"{axis}.motivity = {a.Motivity}：驱动要求大于 1");
+                if (Ok(a.ExponentClassic) && a.ExponentClassic <= 1)
+                    bad.Add($"{axis}.exponentClassic = {a.ExponentClassic}：驱动要求大于 1（2 = 线性增益上升）");
+                if (Ok(a.InputOffset) && a.InputOffset < 0) bad.Add($"{axis}.inputOffset 不能为负");
+                if (Ok(a.OutputOffset) && a.OutputOffset < 0) bad.Add($"{axis}.outputOffset 不能为负");
+                if (Ok(a.Smooth) && (a.Smooth < 0 || a.Smooth > 1)) bad.Add($"{axis}.smooth 必须在 0..1 之间");
+
+                if (a.Cap.X < 0) bad.Add($"{axis}.Cap x（输入侧）不能为负");
+                if (a.Cap.Y < 0) bad.Add($"{axis}.Cap y（输出侧）不能为负");
+                bool capBoth = Is(a.Mode, "jump") || (Is(a.Mode, "classic", "power") && Is(a.CapMode, "in_out"));
+                if (capBoth)
+                {
+                    if (a.Cap.X == 0) bad.Add($"{axis}.Cap x 在 {a.Mode} + {a.CapMode} 下不能是 0（等于把曲线压平）");
+                    if (a.Cap.Y == 0) bad.Add($"{axis}.Cap y 在 {a.Mode} + {a.CapMode} 下不能是 0（等于把曲线压平）");
+                }
+                if (Is(a.Mode, "classic") && a.Cap.X > 0 && a.Cap.X < a.InputOffset && !Is(a.CapMode, "output"))
+                    bad.Add($"{axis}.Cap x = {a.Cap.X} 低于输入阈值 {a.InputOffset}：加速区间是空的");
+                if (Is(a.Mode, "power") && a.Cap.Y > 0 && a.Cap.Y < a.OutputOffset && !Is(a.CapMode, "input"))
+                    bad.Add($"{axis}.Cap y = {a.Cap.Y} 低于输出阈值 {a.OutputOffset}：加速区间是空的");
+                if (Is(a.Mode, "lut") && a.Data.Count < 4)
+                    bad.Add($"{axis} 是 lut 模式但只有 {a.Data.Count} 个数值：驱动至少需要 2 个点（4 个数值）");
+            }
+
             if (a.Data.Count > accel_args.LUT_RAW_DATA_CAPACITY)
                 bad.Add($"{axis}.data 有 {a.Data.Count} 个点，超过 {accel_args.LUT_RAW_DATA_CAPACITY} 的上限");
             for (int i = 0; i < a.Data.Count; i++)
@@ -451,8 +506,11 @@ public static class Json
             var p = r.Profiles[i];
             var tag = $"profile[{i}]“{p.Name}”";
             if (string.IsNullOrWhiteSpace(p.Name)) bad.Add($"{tag} 名字是空的");
+            // the profile name field is WCHAR[256] and WriteWz cuts silently, like the device id
+            if (p.Name.Length >= ra_profile.MAX_NAME_LEN)
+                bad.Add($"{tag} 名字有 {p.Name.Length} 字符，超过驱动字段上限 {ra_profile.MAX_NAME_LEN - 1}，写进驱动会被截断");
             Accel(tag + ".X", p.X);
-            Accel(tag + ".Y", p.Y);
+            Accel(tag + ".Y", p.Y, !p.Speed.Whole);
             Num(tag + ".Output DPI", p.OutputDpi, 8000);
             Num(tag + ".Y/X ratio", p.YxRatio, 100);
             Num(tag + ".L/R ratio", p.LrRatio, 100);
@@ -470,6 +528,18 @@ public static class Json
             Num(tag + ".halflife output", p.Speed.OutputHalflife, 10000);
             if (p.Speed.InputHalflife < 0 || p.Speed.ScaleHalflife < 0 || p.Speed.OutputHalflife < 0)
                 bad.Add($"{tag} 有负的平滑半衰期");
+
+            // valid(profile): a 0 here is not "feature off", it is a write the driver rejects
+            // (or, for output DPI, a multiplier that zeroes every movement).
+            if (p.OutputDpi == 0) bad.Add($"{tag} 输出 DPI 是 0：驱动会拒绝写入，真写进去等于鼠标所有位移输出 0（看起来就是不动）");
+            if (p.YxRatio == 0) bad.Add($"{tag} 垂直倍率 Y/X 是 0：驱动会拒绝，写进去等于纵向输出归零");
+            if (p.LrRatio <= 0) bad.Add($"{tag} 向左倍率 L/R 必须大于 0");
+            if (p.UdRatio <= 0) bad.Add($"{tag} 向上倍率 U/D 必须大于 0");
+            if (p.Domain.X <= 0 || p.Domain.Y <= 0) bad.Add($"{tag} 域权重 domain_weights 必须大于 0");
+            if (p.Range.X < 0 || p.Range.Y < 0) bad.Add($"{tag} 值域权重 range_weights 不能为负");
+            if (p.Speed.LpNorm <= 0) bad.Add($"{tag} lpNorm 必须大于 0（默认 2）");
+            if (p.InputSpeedCap < 0) bad.Add($"{tag} 输入速度上限不能为负（0 = 不限制）");
+            if (p.Snap < 0 || p.Snap > 45) bad.Add($"{tag} 角度吸附必须在 0..45 度（驱动的上限就是 45）");
         }
         for (int i = 0; i < r.Devices.Count; i++)
         {
@@ -487,10 +557,22 @@ public static class Json
             if (d.Config.MaximumTime is { } mx && (mx <= 0 || mx > 1000)) bad.Add($"{tag} maximumTime={mx} 不合理");
             if (d.Config.MinimumTime is { } a && d.Config.MaximumTime is { } b && a > b)
                 bad.Add($"{tag} 时间上下限反了");
+            // the driver compares against the EFFECTIVE clamp (nulls become the 1.7 defaults),
+            // and a min of 0 means it divides the measured interval by nothing
+            var eff = Convert4.ToStruct(d.Config);
+            if (eff.clamp.min <= 0) bad.Add($"{tag} 生效的 minimumTime={eff.clamp.min} 必须大于 0");
+            if (eff.clamp.max < eff.clamp.min) bad.Add($"{tag} 生效的 maximumTime={eff.clamp.max} 小于 minimumTime={eff.clamp.min}");
+            if (d.Name.Length >= ra_profile.MAX_NAME_LEN)
+                bad.Add($"{tag} 的名字有 {d.Name.Length} 字符，超过驱动字段上限 {ra_profile.MAX_NAME_LEN - 1}，写进驱动会被截断");
+            if (d.Profile.Length >= ra_profile.MAX_NAME_LEN)
+                bad.Add($"{tag} 引用的 profile 名有 {d.Profile.Length} 字符，会被截断成对不上号");
         }
         var def = r.DefaultDeviceConfig;
         if (def.Dpi < 0 || def.Dpi > 64000) bad.Add($"默认 DPI={def.Dpi} 不合理");
         if (def.PollingRate < 0 || def.PollingRate > 16000) bad.Add($"默认轮询率={def.PollingRate} 不合理");
+        var defEff = Convert4.ToStruct(def);
+        if (defEff.clamp.min <= 0) bad.Add($"默认 minimumTime={defEff.clamp.min} 必须大于 0");
+        if (defEff.clamp.max < defEff.clamp.min) bad.Add($"默认 maximumTime={defEff.clamp.max} 小于 minimumTime={defEff.clamp.min}");
         if (r.Profiles.Count == 0) bad.Add("文档里一个 profile 都没有");
         if (r.Profiles.Count > 256) bad.Add($"profile 有 {r.Profiles.Count} 个，驱动不接受这么多");
         if (r.Devices.Count > 1024) bad.Add($"设备有 {r.Devices.Count} 个，驱动不接受这么多");
