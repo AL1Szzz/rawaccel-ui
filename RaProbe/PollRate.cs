@@ -115,6 +115,17 @@ public static class PollRate
     [DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    // The 1ms MsgWait timeout is not really 1ms unless the process asks for that timer
+    // granularity. Without it the poll lands on the 15.6ms system tick, each drain has to
+    // swallow ~125 records at once, and any queue-depth limit drops the tail - which then
+    // reads as a 15-20% shortfall against the mouse real rate. Process-scoped, released
+    // before the report, and stated in the report so no number is read without knowing it.
+    [DllImport("winmm.dll")]
+    static extern uint timeBeginPeriod(uint ms);
+
+    [DllImport("winmm.dll")]
+    static extern uint timeEndPeriod(uint ms);
+
     const int WS_OVERLAPPED = 0x00000000, WS_CAPTION = 0x00C00000, WS_SYSMENU = 0x00080000;
     const int SW_SHOWNORMAL = 1;
 
@@ -158,6 +169,7 @@ public static class PollRate
         t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         bufSize = 256 * 64;
         buf = Marshal.AllocHGlobal((int)bufSize);
+        timeBeginPeriod(1);   // paired with timeEndPeriod() before Report(); see the winmm note
 
         try
         {
@@ -251,6 +263,7 @@ public static class PollRate
         }
 
         DestroyWindow(hwnd);
+        timeEndPeriod(1);
         Report((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1.0 / freq, fg);
         return 0;
     }
@@ -342,6 +355,7 @@ public static class PollRate
     {
         double want = Math.Round(elapsed);
         Console.WriteLine();
+        Console.WriteLine("   计时粒度：采样期间开过 timeBeginPeriod(1)（1ms），报告前已 timeEndPeriod 还原。没有它轮询会被系统定时器抬到 15.6ms，高回报率下会先丢一批再数，数出来偏低。");
         Console.WriteLine("   投递路径：" + (fg ? "前台可见窗口（游戏用的这一路）" : "消息专用窗口 + INPUTSINK（后台）"));
         foreach (var line in log) Console.WriteLine("   " + line);
         Console.WriteLine();
