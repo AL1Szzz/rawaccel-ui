@@ -88,6 +88,7 @@ app\RaProbe.exe                 # 结构体尺寸、驱动版本、当前生效�
 app\RaProbe.exe --curve-name    # 驱动里现在跑的是哪套（报名字，不报哈希）
 app\RaProbe.exe --devices       # 枚举鼠标（与驱动匹配用的 HID 实例 ID）
 app\RaProbe.exe --hz 15         # 数 Windows 真正投递给应用的鼠标包（raw input，按设备分）
+app\RaProbe.exe --hz 20 --hz-fg # 同上，但听的是前台可见窗口（游戏用的那一路），会弹一个小窗口
 app\RaProbe.exe --display       # 系统提供的显示模式列表（只列不改）
 app\RaProbe.exe --apply-settings settings.json          # 只读：显示会改哪些字段
 app\RaProbe.exe --apply-settings settings.json --yes    # 写入（走上面那套安全网）
@@ -114,6 +115,7 @@ settings-path.txt   可选：只写一行路径。程序猜不到官方 settings
 - 点小球是桌面指针测试：按像素摆球，不换算游戏角度，所以它的分数只能当"手感有没有变"的粗指标，不等于进游戏的成绩。
 - 没有安装器、没有代码签名、没有自动更新，界面文案只有中文。首次运行 Windows 可能提示不受信任的应用。
 - **回报率不能用浏览器页面或 `WM_MOUSEMOVE` 类工具判**：Windows 在 mouclass/RIT 层就会把鼠标包合并，网页上的 pointerrawupdate 和老式 Mouse Rate 数的是合并后的投递，2000 和 4000 在它眼里可以一模一样。`--hz`（或双击 `回报率.cmd`）数的是 raw input 包，并且同时报每包位移——包数低而每包位移大，就是被合过，不是传感器降频。要分辨只有一种办法：改着测，2000 跑一次、4000 跑一次，看包/秒跟不跟着翻倍。
+- **但 `--hz` 默认听的是后台路径**（消息专用窗口 + `RIDEV_INPUTSINK`）。前台可见窗口和后台 sink 的投递节律可能不同，所以"后台数到 125"**不能直接推成"游戏也只拿到 125"**——要看游戏那一侧，用 `--hz-fg`（或双击 `回报率-前台.cmd`）听前台窗口那一路，两个数对比着下结论。
 
 ## 许可
 

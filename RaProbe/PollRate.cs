@@ -109,6 +109,15 @@ public static class PollRate
     [DllImport("user32.dll")]
     static extern uint MsgWaitForMultipleObjects(uint count, IntPtr handles, bool waitAll, uint ms, uint wakeMask);
 
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int cmdShow);
+
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    const int WS_OVERLAPPED = 0x00000000, WS_CAPTION = 0x00C00000, WS_SYSMENU = 0x00080000;
+    const int SW_SHOWNORMAL = 1;
+
     const uint PM_REMOVE = 1;
     const int WM_APP_QUIT = 0x8000 + 1;
 
@@ -167,13 +176,32 @@ public static class PollRate
         };
         if (RegisterClassExW(ref wc) == 0) { Console.WriteLine("注册窗口类失败：" + Marshal.GetLastWin32Error()); return 1; }
 
-        var hwnd = CreateWindowExW(0, "RaProbePollRate", null, 0, 0, 0, 0, 0,
-            HWND_MESSAGE, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-        if (hwnd == IntPtr.Zero) { Console.WriteLine("建消息窗口失败：" + Marshal.GetLastWin32Error()); return 1; }
+        // --hz-fg counts on a REAL, VISIBLE, foreground window instead of a message-only
+        // background sink. Every number this tool has ever printed came from the background path,
+        // and a game in focus uses the foreground one - if Windows coalesces differently between
+        // the two, then 125 was an artifact of how we listen, not of the mouse. (GetConsoleWindow
+        // is no help: that HWND belongs to conhost, so raw input would go to that process.)
+        bool fg = args.Contains("--hz-fg");
+        IntPtr hwnd;
+        if (fg)
+        {
+            hwnd = CreateWindowExW(0, "RaProbePollRate", "RaProbe 回报率采样 - 请保持本窗口在最前面",
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 120, 120, 620, 190,
+                IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (hwnd == IntPtr.Zero) { Console.WriteLine("建前台窗口失败：" + Marshal.GetLastWin32Error()); return 1; }
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            SetForegroundWindow(hwnd);
+        }
+        else
+        {
+            hwnd = CreateWindowExW(0, "RaProbePollRate", null, 0, 0, 0, 0, 0,
+                HWND_MESSAGE, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (hwnd == IntPtr.Zero) { Console.WriteLine("建消息窗口失败：" + Marshal.GetLastWin32Error()); return 1; }
+        }
 
         var rid = new RAWINPUTDEVICE[]
         {
-            new() { usUsagePage = 1, usUsage = 2, dwFlags = RIDEV_INPUTSINK, hwndTarget = hwnd },  // Generic Desktop / Mouse
+            new() { usUsagePage = 1, usUsage = 2, dwFlags = fg ? 0u : RIDEV_INPUTSINK, hwndTarget = hwnd },
         };
         if (!RegisterRawInputDevices(rid, (uint)rid.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>()))
         {
@@ -184,9 +212,11 @@ public static class PollRate
 
         GetCursorPos(out lastCursor);
 
-        Console.WriteLine($"== 原始输入包计数（Windows 真正投递给应用的鼠标包），{seconds:0} 秒 ==");
-        Console.WriteLine("只注册 raw input：不动指针、不写驱动、不抢焦点（游戏在前台也照样收得到）。");
-        Console.WriteLine("现在请持续移动鼠标，画 8 字或来回扫都可以，别停。");
+        Console.WriteLine($"== 原始输入包计数，{seconds:0} 秒 ==");
+        Console.WriteLine(fg
+            ? "投递路径 = 前台可见窗口（游戏拿到的是这一路）。*** 屏幕上会弹一个小窗口，这期间别点别的窗口、别切走 ***"
+            : "投递路径 = 消息专用窗口 + RIDEV_INPUTSINK（后台接收，不抢焦点）。");
+        Console.WriteLine("只注册 raw input：不动指针、不写驱动。现在请持续移动鼠标，画 8 字或来回扫都可以，别停。");
 
         var quitThread = new System.Threading.Thread(() =>
         {
@@ -221,7 +251,7 @@ public static class PollRate
         }
 
         DestroyWindow(hwnd);
-        Report((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1.0 / freq);
+        Report((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1.0 / freq, fg);
         return 0;
     }
 
@@ -308,10 +338,11 @@ public static class PollRate
         return d;
     }
 
-    static void Report(double elapsed)
+    static void Report(double elapsed, bool fg)
     {
         double want = Math.Round(elapsed);
         Console.WriteLine();
+        Console.WriteLine("   投递路径：" + (fg ? "前台可见窗口（游戏用的这一路）" : "消息专用窗口 + INPUTSINK（后台）"));
         foreach (var line in log) Console.WriteLine("   " + line);
         Console.WriteLine();
         Console.WriteLine($"   采样 {elapsed:0.00}s · GetRawInputBuffer 调用 {drainCalls} 次 / 解出 {drainRecords} 块 / 缓冲不足 {drainShrunk} 次（当前缓冲 {bufSize}B）· 对照：指针位置变化 {cursorSteps} 次 / 共 {cursorTravel} px");
@@ -349,7 +380,7 @@ public static class PollRate
                           : b50 >= 1500 ? "活跃期 ~2000 包/秒：2000Hz 是实的，4000 没吃到"
                           : b50 >= 700 ? $"活跃期 ~{b50:0} 包/秒：只到 1000Hz 级"
                           : $"活跃期 ~{b50:0} 包/秒、每包位移中位 {Pct(mag, .50):0} counts —— 这是合包后的投递节律，不是传感器报告率；游戏拿到的也是这些包"));
-            Console.WriteLine($"   MACHINE\t{d.Id}\tpackets={d.Packets}\tactive_hz_p50={b50:0}\tactive_hz_p90={b90:0}\tmean_hz={hz:0.0}\tgap_p50_ms={(gaps.Count > 2 ? Pct(gaps, .50) : 0):0.000}\tmag_p50={(mag.Count > 2 ? Pct(mag, .50) : 0):0}\tcounts_per_s={d.SumAbs / elapsed:0}\tcursor_steps={cursorSteps}");
+            Console.WriteLine($"   MACHINE\tpath={(fg ? "fg" : "mo")}\t{d.Id}\tpackets={d.Packets}\tactive_hz_p50={b50:0}\tactive_hz_p90={b90:0}\tmean_hz={hz:0.0}\tgap_p50_ms={(gaps.Count > 2 ? Pct(gaps, .50) : 0):0.000}\tmag_p50={(mag.Count > 2 ? Pct(mag, .50) : 0):0}\tcounts_per_s={d.SumAbs / elapsed:0}\tcursor_steps={cursorSteps}");
         }
 
         Console.WriteLine();
