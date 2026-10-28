@@ -379,7 +379,7 @@ public static class PollRate
             Console.WriteLine("   判读：" + (b50 >= 3000 ? "活跃期就有 3000+ 包/秒，4000Hz 这一档确实到了应用层"
                           : b50 >= 1500 ? "活跃期 ~2000 包/秒：2000Hz 是实的，4000 没吃到"
                           : b50 >= 700 ? $"活跃期 ~{b50:0} 包/秒：只到 1000Hz 级"
-                          : $"活跃期 ~{b50:0} 包/秒、每包位移中位 {Pct(mag, .50):0} counts —— 这是合包后的投递节律，不是传感器报告率；游戏拿到的也是这些包"));
+                          : $"活跃期 ~{b50:0} 包/秒、每包位移中位 {Pct(mag, .50):0} counts —— 这是合包后的投递节律，不是传感器报告率；但这只是后台接收路径，游戏用的是前台窗口那一路，要 --hz-fg 才算数"));
             Console.WriteLine($"   MACHINE\tpath={(fg ? "fg" : "mo")}\t{d.Id}\tpackets={d.Packets}\tactive_hz_p50={b50:0}\tactive_hz_p90={b90:0}\tmean_hz={hz:0.0}\tgap_p50_ms={(gaps.Count > 2 ? Pct(gaps, .50) : 0):0.000}\tmag_p50={(mag.Count > 2 ? Pct(mag, .50) : 0):0}\tcounts_per_s={d.SumAbs / elapsed:0}\tcursor_steps={cursorSteps}");
         }
 
@@ -387,8 +387,8 @@ public static class PollRate
         Console.WriteLine("   怎么定案（只有 A/B 说得清）：HUB 里 4000Hz 跑一次，2000Hz 再跑一次，手速差不多。");
         Console.WriteLine("   看三个数：包/秒 翻倍 = 真的多收到一倍；每包位移 减半 = 同样的手速被切成更细的包；");
         Console.WriteLine("   counts/秒 基本不变 = 位移没丢。三条同时成立 = 4K 是实的，网页那一千多是网页的天花板。");
-        Console.WriteLine("   若两次包/秒几乎一样 = Windows 在 mouclass/RIT 层就合包了，任何用户态工具都测不出 4K，");
-        Console.WriteLine("   游戏也吃不到，该查接收器插口/固件，不是加速曲线。");
+        Console.WriteLine("   先分投递路径再下结论：后台 sink 低而前台窗口高 = 管道差别，不是鼠标（今天就栽在这）");
+        Console.WriteLine("   两条路都低 = 这一层真的没收到，再查 USB/固件。");
     }
 
     /// <summary>Packet rate over the 100ms buckets where packets actually arrive. The whole-run
