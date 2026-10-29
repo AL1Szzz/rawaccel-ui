@@ -135,6 +135,25 @@
                             </StackPanel>
                             <TextBlock x:Name="CalibSessionInfo" Style="{StaticResource SubtleTextStyle}"
                                        Margin="0,10,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+
+                            <Border x:Name="LastCalibCard" Margin="0,12,0,0" Padding="12,10"
+                                    Background="#FF1C1C1C" BorderBrush="#FF3D3D3D" BorderThickness="1" CornerRadius="4"
+                                    Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Text="上次盲测" FontWeight="SemiBold" FontSize="13"
+                                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                                    <TextBlock x:Name="TxtLastCalib" Style="{StaticResource SubtleTextStyle}"
+                                               Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
+                                        <Button x:Name="BtnLastCalibPlan" Content="加入我的方案" MinHeight="32"
+                                                Click="OnLastCalibPlan"
+                                                ToolTip="把上次选出的曲线单独存一份，不动你现在这条。"/>
+                                        <Button x:Name="BtnLastCalibApply" Content="设为当前曲线" MinHeight="32"
+                                                Margin="10,0,0,0" Click="OnLastCalibApply"
+                                                ToolTip="用上次选出的曲线替换当前这条（只改界面和文件，写进驱动还要去驱动页点应用）。"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                             <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"
                                        Text="盲测期间会临时改驱动里的曲线，测完自动还原，不动 settings.json。中途退出、崩溃也会在关闭时还原；万一还原失败，状态栏会明确报警。"/>
                         </StackPanel>

@@ -132,6 +132,27 @@ public static class Presets
         catch (Exception e) { error = "写入失败：" + e.Message; return null; }
     }
 
+    /// <summary>
+    /// <paramref name="root"/>, or "root (2)", "root (3)"... whichever is free. Saving overwrites in
+    /// place, and a blind-comparison result quietly replacing last week's result is not a thing a
+    /// player can undo or even notice.
+    /// </summary>
+    public static string FreeName(string root)
+    {
+        // Compared after SafeName, because that is what the file will actually be called: "21:03"
+        // is saved as "2103", and comparing the typed form against the stored form would decide the
+        // name was free every single time - and overwrite the previous result silently.
+        var taken = List().Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string safe = SafeName(root);
+        if (!taken.Contains(safe)) return safe;
+        for (int i = 2; i < 100; i++)
+        {
+            string alt = SafeName($"{root} ({i})");
+            if (!taken.Contains(alt)) return alt;
+        }
+        return SafeName(root) + " " + Guid.NewGuid().ToString("N")[..4];
+    }
+
     public static bool Delete(string name, out string error)
     {
         error = "";

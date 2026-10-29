@@ -65,6 +65,9 @@ public static class SelfTests
         Console.WriteLine("\n== M. Curve lab: candidates, flick consistency, the blind schedule ==");
         Section("curvelab", CurveLabChecks);
 
+        Console.WriteLine("\n== N. Session archive: a result that survives the window ==");
+        Section("archive", ArchiveChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -1106,5 +1109,141 @@ public static class SelfTests
             Check(DrillInfo.DefaultAlive(k) >= 1, $"{k} keeps at least one target alive");
         }
         Check(Enum.GetValues<DrillKind>().Length == 9, "all nine drills are reachable from the picker");
+    }
+
+    // ---------- N ----------
+
+    /// <summary>
+    /// The archive exists because a finished session was once lost: the report screen threw on
+    /// "apply", the process died, and every round went with it because the rounds only lived in the
+    /// window's own lists. These checks are about the file being written as the session runs and
+    /// being enough, on its own, to restore a result afterwards.
+    /// </summary>
+    static void ArchiveChecks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "raui-archive-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var prior = CalibArchive.DirOverride;
+        CalibArchive.DirOverride = dir;      // never write test sessions into the user's archive
+        try
+        {
+            Check(CalibArchive.List().Count == 0, "an empty archive reads back as empty, not as an error");
+            Check(CalibArchive.SafeFile("../../etc/passwd") == "etcpasswd",
+                "a traversal attempt collapses into a plain file name");
+
+            var live = ProfileWith("classic", 0.06);
+            live.Name = "default";
+            live.YxRatio = 1.25;
+            live.Y.InputOffset = 2.5;
+            live.Y.Acceleration = 0.15;
+
+            var cands = AccelCandidates.Build(live, new[] { 0.5, 1.0, 2.0 }, true);
+            int baseIdx = cands.FindIndex(c => c.IsBase);
+            int winnerIdx = cands.FindIndex(c => !c.IsBase && !c.IsNoAccel);
+
+            var session = new CalibArchive.Session
+            {
+                Id = "2026-10-29_21-03-08",
+                Family = "两轴同步",
+                ProfileName = live.Name,
+                BaseLabel = AccelCandidates.Describe(live, Plan.Uniform),
+                RoundsPlanned = 35,
+                BaseJson = CalibArchive.Embedded(cands[baseIdx].Profile),
+                WinnerJson = CalibArchive.Embedded(cands[winnerIdx].Profile),
+                WinnerIndex = winnerIdx,
+                WinnerLabel = cands[winnerIdx].Secret,
+                Finished = true,
+                Headline = "有更合适的：候选 2。",
+                Reasons = { "决选里它在 4/5 个项目上超过你现在这条。" },
+                Candidates = cands.Select((c, i) => new CalibArchive.CandidateRow
+                {
+                    Index = i, Blind = c.BlindLabel, Secret = c.Secret, IsBase = c.IsBase, IsNoAccel = c.IsNoAccel,
+                }).ToList(),
+            };
+            // tracking never clicks, and NaN is not a JSON number: it has to survive as "no data"
+            session.Rounds.Add(new CalibArchive.RoundRow
+            {
+                Phase = "探索", Item = DrillInfo.Name(DrillKind.Tracking), Candidate = winnerIdx, Skill = 0.62,
+            });
+            session.Rounds.Add(new CalibArchive.RoundRow
+            {
+                Phase = "探索", Item = DrillInfo.Name(DrillKind.Sixshot), Candidate = baseIdx, Skill = 41.5,
+                Consistency = 0.81, Detail = "清掉 6 组", Valid = true,
+            });
+            session.Rounds.Add(new CalibArchive.RoundRow
+            {
+                Phase = "决选", Item = DrillInfo.Name(DrillKind.Gridshot), Candidate = winnerIdx, Skill = 0,
+                Valid = false, Problem = "本轮提前结束，成绩不计入",
+            });
+
+            string? file = CalibArchive.Save(session, out string err);
+            Check(file != null && err == "", "a session saves");
+            Check(file != null && Path.GetDirectoryName(file) == CalibArchive.Dir,
+                "it lands in the archive folder, never beside it");
+
+            var back = CalibArchive.Latest();
+            Check(back != null, "the newest session comes back out of the folder");
+            Check(back!.Rounds.Count == 3, $"every round is in the file ({back.Rounds.Count})");
+            Check(back.Rounds[0].Consistency == null,
+                "a round with no flick to measure is stored as no data, not as zero consistency");
+            Check(back.Rounds[0].Skill > 0, "and its score still counts");
+            Check(!back.Rounds[2].Valid && back.Rounds[2].Problem.Length > 0,
+                "a discarded round is marked as such, so re-reading cannot silently rank it");
+            Check(back.WinnerIndex == winnerIdx && back.WinnerLabel.Length > 0, "the verdict survives");
+            Check(back.SavedAt.Length > 0, "the file is stamped, so 'last session' means something");
+
+            var winner = CalibArchive.WinnerProfile(back);
+            Check(winner != null, "the winning curve comes back out of the file as a curve");
+            Check(Math.Abs(winner!.YxRatio - 1.25) < 1e-9 && Math.Abs(winner.Y.InputOffset - 2.5) < 1e-9,
+                "with the vertical half intact - a result that only restored one axis would be a trap");
+            Check(Math.Abs(winner.Y.Acceleration - cands[winnerIdx].Profile.Y.Acceleration) < 1e-9,
+                "and with the very numbers the round was played on");
+            Check(Json.Validate(new RootDto { Profiles = { winner } }).Count == 0,
+                "a curve recovered from an archive is still safe to hand to the driver");
+
+            var original = CalibArchive.BaseProfile(back);
+            Check(original != null && Math.Abs(original!.X.Acceleration - 0.06) < 1e-9,
+                "the pre-session curve is kept too, so a result can be undone");
+
+            Check(CalibArchive.Summarize(back).Contains("2026-10-29"), "the one-line summary says when it ran");
+            Check(CalibArchive.Summarize(back).Contains("候选 2"), "and what it decided");
+
+            // a session interrupted before the report still has to be findable
+            var partial = new CalibArchive.Session
+            {
+                Id = "2026-10-29_21-40-00", RoundsPlanned = 35, ProfileName = live.Name,
+                BaseJson = CalibArchive.Embedded(live),
+            };
+            partial.Rounds.Add(new CalibArchive.RoundRow { Phase = "探索", Item = "网格速击", Candidate = 0, Skill = 12 });
+            CalibArchive.Save(partial, out _);
+            var newest = CalibArchive.Latest();
+            Check(newest != null && newest.Id == "2026-10-29_21-40-00", "the newest file wins, newest first");
+            Check(!newest!.Finished && CalibArchive.Summarize(newest).Contains("没跑完"),
+                "an interrupted session says so instead of pretending to have a verdict");
+            Check(CalibArchive.WinnerProfile(newest) == null && CalibArchive.BaseProfile(newest) != null,
+                "it offers the original curve back but no winner, because there is none");
+            Check(CalibArchive.List(2).Count == 2, "the archive lists several sessions");
+
+            // the button that puts a result into 我的方案 must never overwrite an older one
+            var presetDir = Path.Combine(Path.GetTempPath(), "raui-presets-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(presetDir);
+            var priorPresets = Presets.DirOverride;
+            Presets.DirOverride = presetDir;
+            try
+            {
+                // the typed name holds a colon, which SafeName drops on the way to the file name;
+                // comparing the two forms directly would call the name free forever and overwrite
+                string n1 = Presets.FreeName("盲测 10-29 21:03");
+                Check(n1.Length > 0 && Presets.Save(n1, live, out _) != null, "the first result saves under its own name");
+                string n2 = Presets.FreeName("盲测 10-29 21:03");
+                Check(n2 != n1 && Presets.Save(n2, live, out _) != null, "a second result does not overwrite the first");
+                Check(Presets.List().Count(p => p.Name.StartsWith("盲测")) == 2,
+                    $"both are still in the library ({string.Join(", ", Presets.List().Select(p => p.Name))})");
+                string n3 = Presets.FreeName("盲测 10-29 21:03");
+                Check(n3 != n1 && n3 != n2, "and a third gets the next number rather than the same slot");
+            }
+            finally { Presets.DirOverride = priorPresets; try { Directory.Delete(presetDir, true); } catch { } }
+        }
+        finally { CalibArchive.DirOverride = prior; try { Directory.Delete(dir, true); } catch { } }
     }
 }

@@ -62,11 +62,33 @@ public partial class CalibrationSessionWindow : Window
     CalibPlan.Verdict? verdict;
     bool modeChanged, finished, aborting;
     int skipped;
+    WindowState prevState = WindowState.Normal;
 
     public ProfileDto? RecommendedProfile { get; private set; }
     /// <summary>Which profile the session actually swapped, so the caller patches that one.</summary>
     public string TestedProfile => push.SwappedProfileName;
     public string RecommendedLabel { get; private set; } = "";
+
+    /// <summary>
+    /// Whether the player took the result. This is a field and not DialogResult on purpose: the
+    /// session is shown with ShowDialog, but a ShowDialog window that is ever hidden stops being a
+    /// dialog, and setting DialogResult afterwards throws InvalidOperationException - which is
+    /// exactly how "apply" used to kill the process at the end of a finished session. The window
+    /// applies the result itself, so a caller that missed the return value still loses nothing.
+    /// </summary>
+    public bool Accepted { get; private set; }
+
+    /// <summary>Set when the result was also stored under 我的方案.</summary>
+    public bool SavedAsPlan { get; private set; }
+
+    /// <summary>
+    /// The session as it goes, written to disk after every round. The rounds used to live only in
+    /// the lists above, so a crash on the report screen took the whole session with it.
+    /// </summary>
+    readonly CalibArchive.Session archive = new() { Id = CalibArchive.NewId() };
+    string archivePath = "";
+    bool archiveWarned;
+    string archiveError = "";
 
     public CalibrationSessionWindow(Options opts)
     {
@@ -90,6 +112,19 @@ public partial class CalibrationSessionWindow : Window
         candidates.AddRange(AccelCandidates.BuildFor(opts.Family, live, opts.Multipliers, opts.IncludeNoAccel));
         baseIndex = candidates.FindIndex(c => c.IsBase);
         if (baseIndex < 0) baseIndex = 0;
+
+        archive.Family = opts.Family == Plan.Wrist ? "手腕流分轴" : "两轴同步";
+        archive.ProfileName = live.Name ?? "";
+        archive.BaseLabel = AccelCandidates.Describe(live, opts.Family);
+        archive.Candidates = candidates.Select((c, i) => new CalibArchive.CandidateRow
+        {
+            Index = i,
+            Blind = c.BlindLabel,
+            Secret = c.Secret,
+            IsBase = c.IsBase,
+            IsNoAccel = c.IsNoAccel,
+        }).ToList();
+        archive.BaseJson = CalibArchive.Embedded(candidates[baseIndex].Profile);
 
         string mode = (live.X.Mode ?? "").Trim().ToLowerInvariant();
         string knob = AccelCandidates.KnobName(mode);
@@ -278,7 +313,12 @@ public partial class CalibrationSessionWindow : Window
             return;
         }
 
-        Hide();
+        // Minimized, never Hide(). This window is shown with ShowDialog, and hiding a dialog window
+        // ends the dialog right there: ShowDialog returns immediately and the window stops counting
+        // as one, so the "apply" button at the end would throw on DialogResult and take the app
+        // with it. Minimizing keeps the dialog alive; the drill window is topmost and covers it.
+        prevState = WindowState;
+        WindowState = WindowState.Minimized;
         var cfg = new DrillWindow.Config
         {
             Kind = r.Item,
@@ -298,7 +338,7 @@ public partial class CalibrationSessionWindow : Window
         w.Closed += (_, _) => Dispatcher.Invoke(() =>
         {
             Record(r, w.Run, w.Completed ? "" : "本轮提前结束，成绩不计入");
-            Show();
+            WindowState = prevState;
             Activate();
             roundPos++;
             ShowRound();
@@ -323,12 +363,42 @@ public partial class CalibrationSessionWindow : Window
         };
 
         (phase == CalibPlan.Phase.Explore ? exploreResults : finalResults).Add(res);
+        SaveArchive();
 
         if (problem.Length > 0) skipped++;
         RoundLast.Text = run == null
             ? $"上一轮作废：{problem}"
             : $"上一轮（{DrillInfo.Name(r.Item)}）：{run.Score()}" +
               (run.Flick.Samples >= 2 ? $" · 跨距离一致性 {run.Flick.Consistency:0.00}" : "");
+    }
+
+    /// <summary>
+    /// Writes the session as it stands. Called after every round rather than at the end, because a
+    /// session that ends in a crash still has to be findable afterwards.
+    /// </summary>
+    void SaveArchive()
+    {
+        // Offscreen renders are not sessions; they must not leave files behind.
+        if (opts.DebugReport || opts.DebugStage.Length > 0) return;
+
+        archive.Rounds = exploreResults.Concat(finalResults).Select(r => new CalibArchive.RoundRow
+        {
+            Phase = r.Round.Phase == CalibPlan.Phase.Final ? "决选" : "探索",
+            Item = DrillInfo.Name(r.Round.Item),
+            Candidate = r.Round.CandidateIndex,
+            Skill = r.Skill,
+            Consistency = double.IsNaN(r.Consistency) ? null : r.Consistency,
+            Detail = r.Detail,
+            Valid = r.Valid,
+            Problem = r.Problem,
+        }).ToList();
+
+        string? file = CalibArchive.Save(archive, out string error);
+        if (file != null) { archivePath = file; return; }
+        // Remembered, not shown here: the status bar is rewritten a moment later by whatever called
+        // this, and a warning that gets overwritten is worse than one that rides along with the
+        // report's own caveats.
+        if (!archiveWarned) { archiveWarned = true; archiveError = error; }
     }
 
     void AdvancePhase()
@@ -391,11 +461,45 @@ public partial class CalibrationSessionWindow : Window
                 Margin = new Thickness(0, 2, 0, 2),
             });
 
+        if (archiveError.Length > 0)
+            CaveatList.Items.Add(new TextBlock
+            {
+                Text = "· 结果没能存盘：" + archiveError + " —— 关掉这个窗口就找不回了，先抄下上面的数值。",
+                Foreground = (Brush)FindResource("WarningBrush"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 2),
+            });
+        else if (archivePath.Length > 0)
+            CaveatList.Items.Add(new TextBlock
+            {
+                Text = "· 这次的成绩已经存下来了：即使现在强退，也能在瞄准页「上次盲测」里找回并重新加入方案。",
+                Foreground = (Brush)FindResource("TextSecondaryBrush"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 2),
+            });
+
         int winner = verdict.WinnerIndex;
         RecommendedProfile = candidates[winner].Profile;
         RecommendedLabel = candidates[winner].Secret;
         BtnApply.IsEnabled = !verdict.WinnerIsBase;
         BtnApply.Content = verdict.WinnerIsBase ? "你现在的就是最优" : $"用候选 {winner + 1}";
+
+        foreach (var row in archive.Candidates)
+        {
+            if (ranking.MeanRank.TryGetValue(row.Index, out var mr)) row.MeanRank = mr;
+            if (ranking.MeanConsistency.TryGetValue(row.Index, out var mc) && !double.IsNaN(mc)) row.MeanConsistency = mc;
+        }
+
+        archive.Finished = true;
+        archive.Headline = verdict.Headline;
+        archive.Reasons = verdict.Reasons.ToList();
+        archive.WinnerIndex = winner;
+        archive.WinnerIsBase = verdict.WinnerIsBase;
+        archive.WinnerLabel = verdict.WinnerIsBase ? archive.BaseLabel : candidates[winner].Secret;
+        // keep the original too: a result you can only apply and never undo is a trap
+        archive.BaseJson = CalibArchive.Embedded(candidates[baseIndex].Profile);
+        archive.WinnerJson = CalibArchive.Embedded(candidates[winner].Profile);
+        SaveArchive();
 
         if (push.RestoreFailure != null)
             StatusBar.Text = "⚠ " + push.RestoreFailure + " —— 去驱动页手动应用一次你的曲线。";
@@ -459,9 +563,61 @@ public partial class CalibrationSessionWindow : Window
 
     void OnApply(object sender, RoutedEventArgs e)
     {
-        if (RecommendedProfile == null) return;
-        DialogResult = true;
-        Close();
+        if (RecommendedProfile == null) { StatusBar.Text = "这次没有选出可应用的曲线。"; return; }
+
+        // The window does the applying itself. Leaving it to the caller means a caller that already
+        // returned (ShowDialog can end early, see OnNextRound) silently drops the result, and that
+        // failure looks exactly like "I pressed apply and nothing happened".
+        try
+        {
+            App.State.ReplaceProfile(TestedProfile, RecommendedProfile);
+            bool saved = App.State.SaveToFile();
+            Accepted = true;
+            archive.Applied = true;
+            SaveArchive();
+            StatusBar.Text = saved
+                ? $"已把「{RecommendedLabel}」设为当前曲线（还没写进驱动，去驱动页点应用）。"
+                : "曲线已替换，但没能保存到文件，去曲线页手动应用一次。";
+            Close();
+        }
+        catch (Exception ex)
+        {
+            // A throw here used to kill the process mid-session, leaving the driver on a candidate
+            // curve. Anything that goes wrong now stays on screen instead.
+            StatusBar.Text = "应用失败：" + ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Keep the result as a preset without touching the curve in use. This is the option people
+    /// actually want after fifteen minutes of testing: not "change my mouse now" but "don't throw
+    /// this away, I want to be able to come back to it".
+    /// </summary>
+    void OnSavePlan(object sender, RoutedEventArgs e)
+    {
+        if (RecommendedProfile == null) { StatusBar.Text = "这次没有选出可以保存的曲线。"; return; }
+
+        try
+        {
+            string name = Presets.FreeName("盲测 " + DateTime.Now.ToString("MM-dd HH:mm"));
+            string when = archive.SavedAt.Length > 0 ? archive.SavedAt : archive.Id.Replace("_", " ");
+            string note = $"盲测 {when}\n" +
+                          archive.Headline + "\n" +
+                          string.Join("\n", archive.Reasons) + "\n" +
+                          "数值：" + RecommendedLabel;
+            string? file = Presets.Save(name, RecommendedProfile, out string error, note);
+            if (file == null) { StatusBar.Text = "存方案失败：" + error; return; }
+
+            SavedAsPlan = true;
+            archive.SavedAsPlan = true;
+            archive.PlanName = name;
+            SaveArchive();
+
+            BtnSavePlan.IsEnabled = false;
+            BtnSavePlan.Content = "已加入我的方案";
+            StatusBar.Text = $"已存为「{name}」。它不会动你现在这条曲线 —— 去「我的方案」页随时一键换过去。";
+        }
+        catch (Exception ex) { StatusBar.Text = "存方案失败：" + ex.Message; }
     }
 
     void OnClose(object sender, RoutedEventArgs e) => Close();

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using RaCore;
 using RaCore.Model;
@@ -17,6 +18,28 @@ public partial class App : Application
     /// <summary>Offscreen render check (--dump-ui / --dump-flick / --dump-tray): no window on screen, no timer.</summary>
     public static bool Headless { get; private set; }
 
+    /// <summary>
+    /// Where unhandled exceptions are written. Keeping them is the whole point: an error the player
+    /// saw once and closed is impossible to diagnose later, and "it just vanished" is otherwise all
+    /// anybody can ever report.
+    /// </summary>
+    public static string CrashLogPath => Path.Combine(AppData.Root, "raui-crash.log");
+
+    public static void CrashLog(Exception? ex, string where)
+    {
+        try
+        {
+            var line = new System.Text.StringBuilder();
+            line.Append('[').Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")).Append("] ")
+                .Append(where).Append(" · ").AppendLine(ex?.GetType().Name ?? "null")
+                .AppendLine(ex?.Message)
+                .AppendLine(ex?.StackTrace ?? "")
+                .AppendLine(new string('-', 60));
+            File.AppendAllText(CrashLogPath, line.ToString());
+        }
+        catch { /* logging must never be the reason the app stops */ }
+    }
+
     public static void ExitApplication()
     {
         IsExiting = true;
@@ -30,6 +53,29 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // A thrown exception on a UI event handler used to end the process: the blind comparison
+        // died on "apply" this way, mid-session, with the driver still holding a candidate curve.
+        // Nothing here is meant to be fatal, so an unhandled exception is logged, shown, and survived.
+        DispatcherUnhandledException += (_, a) =>
+        {
+            CrashLog(a.Exception, "UI");
+            a.Handled = true;
+            try
+            {
+                MessageBox.Show(
+                    "出了个没预料到的错，程序没有退出：\n\n" + a.Exception.Message +
+                    "\n\n详情写进了 " + CrashLogPath + "\n已经改的东西还在，可以关掉当前窗口重试。",
+                    "RawAccelUI", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            catch { /* a deskless session must not die on the dialog either */ }
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, a) =>
+        {
+            CrashLog(a.ExceptionObject as Exception ?? new Exception(a.ExceptionObject?.ToString() ?? "unknown"),
+                     a.IsTerminating ? "fatal" : "background");
+        };
 
         // defaults: work on the official file wherever it is installed, else our own data folder
         string path = RaCore.SettingsFile.Default();
@@ -91,6 +137,19 @@ public partial class App : Application
             Headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             _ = CalibPushCheckAsync();
+            return;
+        }
+
+        // --calib-apply-check: press the report's two buttons for real. They are the only controls
+        // in the app that write to the player's own settings, and one of them used to throw
+        // InvalidOperationException and take the process down with it. Rendered offscreen with an
+        // invented session, so a regression shows up without playing thirty-five rounds.
+        int applyIdx = System.Array.FindIndex(e.Args, a => a == "--calib-apply-check");
+        if (applyIdx >= 0)
+        {
+            Headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            CalibApplyCheck();
             return;
         }
 
@@ -507,6 +566,66 @@ public partial class App : Application
                 ? $"{what}: restore ok, byte-for-byte the settings from before the check"
                 : $"{what}: RESTORE FAILED - " + (push.RestoreFailure ?? "bytes differ"));
         }
+    }
+
+    /// <summary>
+    /// Press 应用 and 加入我的方案 on an invented report. Both write things a player cares about
+    /// (the current curve, the preset library), so this runs against a scratch folder; the point is
+    /// only that neither button throws. "Apply" throwing is what killed the app at the end of a
+    /// finished session - and did it with the driver still holding a candidate curve.
+    /// </summary>
+    static void CalibApplyCheck()
+    {
+        var scratch = Path.Combine(Path.GetTempPath(), "raui-applycheck-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(scratch);
+        Presets.DirOverride = Path.Combine(scratch, "presets");
+        CalibArchive.DirOverride = Path.Combine(scratch, "sessions");
+
+        string before = App.State.SelectedProfile?.Name ?? "(none)";
+        var w = new CalibrationSessionWindow(new CalibrationSessionWindow.Options { DebugReport = true });
+        w.Show();
+        w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+
+        var type = w.GetType();
+        void Press(string method)
+        {
+            try
+            {
+                var mi = type.GetMethod(method, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (mi == null) { System.Console.WriteLine(method + ": NOT FOUND"); return; }
+                mi.Invoke(w, new object?[] { null, null });
+            }
+            catch (Exception ex)
+            {
+                var inner = ex.InnerException ?? ex;
+                System.Console.WriteLine(method + " THREW " + inner.GetType().Name + ": " + inner.Message);
+                throw;
+            }
+        }
+
+        try
+        {
+            Press("OnSavePlan");
+            System.Console.WriteLine(w.SavedAsPlan
+                ? "加入我的方案 ok: 存成了一条预设，当前曲线没动"
+                : "加入我的方案 FAILED: 没有存下来");
+
+            Press("OnApply");
+            System.Console.WriteLine(w.Accepted
+                ? $"应用 ok: 结果写进了「{before}」，没有抛异常"
+                : "应用 FAILED: 没有接受结果");
+        }
+        catch (Exception ex)
+        {
+            CrashLog(ex, "calib-apply-check");
+            System.Console.WriteLine("FAILED: a button still throws - see " + CrashLogPath);
+        }
+
+        try { w.Close(); } catch { }
+        Presets.DirOverride = null;
+        CalibArchive.DirOverride = null;
+        try { Directory.Delete(scratch, true); } catch { }
+        Current?.Shutdown();
     }
 
     /// <summary>Render the blind-comparison report with invented rounds and save it.</summary>

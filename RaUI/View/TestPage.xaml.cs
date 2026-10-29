@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using RaCore;
+using RaCore.Model;
 
 namespace RaUI.View;
 
@@ -47,6 +48,7 @@ public partial class TestPage : UserControl
             RefreshPlan();
             RefreshCalib();
             FillRounds();
+            RefreshLastCalib();
         };
         TxtSens.TextChanged += (_, _) => RefreshCalib();
         TxtDpi.TextChanged += (_, _) => RefreshCalib();
@@ -348,6 +350,7 @@ public partial class TestPage : UserControl
     {
         RememberPrefs();
         CalibSessionInfo.Visibility = Visibility.Collapsed;
+        lastCalib = null;
 
         var live = App.State.SelectedProfile;
         if (live == null) { App.State.Status = "先在曲线页选一条曲线，盲测是拿它做基准的。"; return; }
@@ -374,22 +377,81 @@ public partial class TestPage : UserControl
             MaxRounds = CalibRounds(),
         });
 
-        bool? applied = w.ShowDialog();
-        if (applied == true && w.RecommendedProfile is { } pick)
+        // The window applies the result itself; waiting on ShowDialog's return value is what made a
+        // "apply" that ended the dialog early look like it had done nothing at all.
+        w.ShowDialog();
+
+        if (w.Accepted)
         {
-            App.State.ReplaceProfile(w.TestedProfile, pick);
-            if (App.State.SaveToFile())
-                App.State.Status = $"已把「{w.RecommendedLabel}」设为当前曲线（还没写进驱动，去驱动页点应用）。";
-            else
-                App.State.Status = "曲线已替换，但没能保存到文件。";
+            App.State.Status = $"已把「{w.RecommendedLabel}」设为当前曲线（还没写进驱动，去驱动页点应用）。";
             RefreshPlan();
         }
         else if (w.RecommendedProfile != null)
         {
-            CalibSessionInfo.Text = $"结论：{w.RecommendedLabel}。没有改动你的曲线，需要的话可以自己照着这个数改。";
+            CalibSessionInfo.Text = $"结论：{w.RecommendedLabel}。没有改动你的曲线 —— 想留着就在报告里点「加入我的方案」，" +
+                                    "或者在这儿用「上次盲测」再取回来。";
             CalibSessionInfo.Visibility = Visibility.Visible;
         }
         FillRounds();
+        RefreshLastCalib();
+    }
+
+    // ---------- 上次盲测 ----------
+
+    CalibArchive.Session? lastCalib;
+    ProfileDto? lastCalibProfile;
+
+    /// <summary>
+    /// The most recent saved session, offered again. The point is that a session outlives its window:
+    /// if the report was closed, or the process died, the rounds are still on disk and the result is
+    /// still usable.
+    /// </summary>
+    void RefreshLastCalib()
+    {
+        lastCalib = CalibArchive.Latest();
+        lastCalibProfile = CalibArchive.WinnerProfile(lastCalib);
+        if (lastCalib == null) { LastCalibCard.Visibility = Visibility.Collapsed; return; }
+
+        LastCalibCard.Visibility = Visibility.Visible;
+        string what = lastCalibProfile == null
+            ? "那次没跑到出结论，没有留下可选曲线。"
+            : lastCalib.WinnerIsBase
+                ? "结论是：你当时那条就是最优的。"
+                : "选出的曲线：" + lastCalib.WinnerLabel;
+        TxtLastCalib.Text = CalibArchive.Summarize(lastCalib) + "\n" + what +
+                            (lastCalib.SavedAsPlan ? $"\n已经存为「{lastCalib.PlanName}」。" : "");
+        bool usable = lastCalibProfile != null;
+        BtnLastCalibPlan.IsEnabled = usable;
+        BtnLastCalibApply.IsEnabled = usable;
+    }
+
+    void OnLastCalibPlan(object sender, RoutedEventArgs e)
+    {
+        if (lastCalibProfile == null || lastCalib == null) return;
+        string name = Presets.FreeName("盲测 " + lastCalib.Id[..10].Replace("_", " "));
+        string note = "来自 " + CalibArchive.Summarize(lastCalib) + "\n数值：" + lastCalib.WinnerLabel;
+        string? file = Presets.Save(name, lastCalibProfile, out string error, note);
+        if (file == null) { App.State.Status = "存方案失败：" + error; return; }
+
+        lastCalib.SavedAsPlan = true;
+        lastCalib.PlanName = name;
+        CalibArchive.Save(lastCalib, out _);
+        App.State.Status = $"上次盲测的曲线已存为「{name}」，去「我的方案」页可以一键换过去。";
+        RefreshLastCalib();
+    }
+
+    void OnLastCalibApply(object sender, RoutedEventArgs e)
+    {
+        if (lastCalibProfile == null || lastCalib == null) return;
+        string target = lastCalib.ProfileName.Length > 0
+            ? lastCalib.ProfileName
+            : App.State.SelectedProfile?.Name ?? "";
+        App.State.ReplaceProfile(target, lastCalibProfile);
+        App.State.Status = App.State.SaveToFile()
+            ? $"已把上次盲测选出的「{lastCalib.WinnerLabel}」设为当前曲线（还没写进驱动，去驱动页点应用）。"
+            : "曲线已替换，但没能保存到文件。";
+        RefreshPlan();
+        RefreshLastCalib();
     }
 
     void OnCalibrate(object sender, RoutedEventArgs e)

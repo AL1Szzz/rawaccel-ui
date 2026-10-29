@@ -160,6 +160,9 @@
                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,16,0,0">
                     <Button x:Name="BtnApply" Content="用这条曲线" MinWidth="150" MinHeight="36"
                             Style="{StaticResource AccentButton}" Click="OnApply"/>
+                    <Button x:Name="BtnSavePlan" Content="加入我的方案" MinWidth="130" MinHeight="36"
+                            Margin="10,0,0,0" Click="OnSavePlan"
+                            ToolTip="把这次选出的曲线单独存一份，不动你现在这条。之后在「我的方案」页可以随时一键换过去，也能和现在的对比。"/>
                     <Button Content="关闭" Margin="10,0,0,0" MinHeight="36" Click="OnClose"/>
                 </StackPanel>
             </Grid>
