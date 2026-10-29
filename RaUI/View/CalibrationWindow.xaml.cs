@@ -26,6 +26,8 @@ public partial class CalibrationWindow : Window
         public double Sens = 1.5;
         public double Dpi = 600;
         public double TargetCm360 = 30;
+        /// <summary>360 for a full lap, 180 for the half turn the calibration session starts with.</summary>
+        public double LapDeg = 360;
         /// <summary>Test hook: draw the dial at a fixed angle, no raw input, no timer.</summary>
         public bool DebugStatic;
     }
@@ -52,6 +54,7 @@ public partial class CalibrationWindow : Window
         this.cfg = cfg;
         turn.Sensitivity = cfg.Sens;
         turn.Dpi = cfg.Dpi;
+        turn.LapDeg = cfg.LapDeg;
         InitializeComponent();
         Loaded += OnLoaded;
         Closed += OnClosed;
@@ -97,7 +100,8 @@ public partial class CalibrationWindow : Window
         }
         else
         {
-            SubText.Text = "推鼠标，让红色的起始标记转回正上方。这一圈推了多远，就是你的 cm/360。";
+            SubText.Text = cfg.LapDeg < 360 ? "推鼠标，让红色的起始标记转到正下方。这半圈推了多远，乘二就是你的 cm/360。"
+                                        : "推鼠标，让红色的起始标记转回正上方。这一圈推了多远，就是你的 cm/360。";
             lastDx = raw.Dx;
             timer.Start();
         }
@@ -177,12 +181,12 @@ public partial class CalibrationWindow : Window
         if (turn.Full && !lapAnnounced)
         {
             lapAnnounced = true;
-            LapText.Text = $"一圈 = {Math.Abs(turn.Cm):0.0} cm";
-            ResultText.Text = $"转满一圈：{Math.Abs(turn.Cm):0.0} cm 走完 360°";
+            LapText.Text = $"{cfg.LapDeg:0}° = {Math.Abs(turn.Cm):0.0} cm";
+            ResultText.Text = $"转满 {cfg.LapDeg:0}°：{Math.Abs(turn.Cm):0.0} cm，换算成整圈是 {turn.CmPer360Measured:0.0} cm/360";
         }
         else if (!turn.Full)
         {
-            LapText.Text = turn.Packets == 0 ? "还在等鼠标动" : $"还差 {360 - turn.AngleAbsDeg:0}°";
+            LapText.Text = turn.Packets == 0 ? "还在等鼠标动" : $"还差 {Math.Max(0, cfg.LapDeg - turn.AngleAbsDeg):0}°";
         }
     }
 

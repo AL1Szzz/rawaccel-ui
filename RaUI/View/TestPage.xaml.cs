@@ -31,6 +31,9 @@ public partial class TestPage : UserControl
         SelectByTag(CmbDrill, pr.DrillKind.ToString());
         TxtDrillSeconds.Text = pr.DrillSeconds.ToString(CultureInfo.InvariantCulture);
         TxtDrillRadius.Text = pr.DrillRadiusPx.ToString("0.#", CultureInfo.InvariantCulture);
+        TxtCalibMult.Text = pr.CalibMultipliers;
+        TxtCalibRounds.Text = pr.CalibRounds.ToString(CultureInfo.InvariantCulture);
+        ChkCalibNoAccel.IsChecked = pr.CalibNoAccel;
         TxtCrossArm.Text = pr.CrossArm.ToString("0.#", CultureInfo.InvariantCulture);
         TxtCrossGap.Text = pr.CrossGap.ToString("0.#", CultureInfo.InvariantCulture);
         ChkCrossDot.IsChecked = pr.CrossDot;
@@ -232,7 +235,7 @@ public partial class TestPage : UserControl
     int DrillIndex => int.TryParse((CmbDrill.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var v) ? v : 0;
     int DrillSecondsValue => Math.Clamp(ParseI(TxtDrillSeconds.Text, 60), 10, 900);
     double DrillRadiusValue => Math.Clamp(ParseD(TxtDrillRadius.Text, 22), 6, 120);
-    string DrillName => (CmbDrill.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "网格速击";
+    string DrillName => DrillInfo.Name((DrillKind)DrillIndex);
 
     void OnStartDrill(object sender, RoutedEventArgs e) => StartDrill(true);
     void OnStartDrillKeepMode(object sender, RoutedEventArgs e) => StartDrill(false);
@@ -316,6 +319,71 @@ public partial class TestPage : UserControl
     }
 
     // ---------- calibration ----------
+
+    // ---------- blind curve session ----------
+
+    double[] CalibMultipliers()
+    {
+        var parts = (TxtCalibMult.Text ?? "").Split(',', ';', ' ')
+            .Select(t => t.Trim())
+            .Where(t => t.Length > 0)
+            .Select(t => double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : double.NaN)
+            .Where(v => !double.IsNaN(v) && v >= 0.05 && v <= 20)
+            .ToArray();
+        // 1.0 must be in the set or the player's own curve is never tested and the verdict would
+        // always be "change something"
+        if (parts.Length == 0 || !parts.Any(v => Math.Abs(v - 1.0) < 1e-9)) parts = AccelCandidates.DefaultMultipliers;
+        return parts;
+    }
+
+    int CalibRounds() => Math.Clamp(ParseI(TxtCalibRounds.Text, 0), 0, 200);
+
+    void OnStartCalibSession(object sender, RoutedEventArgs e)
+    {
+        RememberPrefs();
+        CalibSessionInfo.Visibility = Visibility.Collapsed;
+
+        var live = App.State.SelectedProfile;
+        if (live == null) { App.State.Status = "先在曲线页选一条曲线，盲测是拿它做基准的。"; return; }
+        if (!App.State.DriverReachable) { App.State.Status = "驱动连不上，盲测要把候选写进驱动才能比。"; return; }
+        if (!AccelCandidates.Sweepable(live))
+        {
+            App.State.Status = $"现在是「{live.X.Mode}」模式，没有可以扫的参数（无加速本身就是没有加速）。换一条带加速的曲线再来。";
+            return;
+        }
+
+        var w = new CalibrationSessionWindow(new CalibrationSessionWindow.Options
+        {
+            RadiusPx = DrillRadiusValue,
+            Resolution = AppState.Prefs.UseCustomFullscreenMode ? PlannedMode() : null,
+            CrossArm = CrossArm,
+            CrossGap = CrossGap,
+            CrossColor = CrossColor,
+            CrossDot = ChkCrossDot.IsChecked == true,
+            DeviceId = DeviceId,
+            GameSens = Sens,
+            Multipliers = CalibMultipliers(),
+            IncludeNoAccel = ChkCalibNoAccel.IsChecked == true,
+            MaxRounds = CalibRounds(),
+        });
+
+        bool? applied = w.ShowDialog();
+        if (applied == true && w.RecommendedProfile is { } pick)
+        {
+            App.State.ReplaceProfile(w.TestedProfile, pick);
+            if (App.State.SaveToFile())
+                App.State.Status = $"已把「{w.RecommendedLabel}」设为当前曲线（还没写进驱动，去驱动页点应用）。";
+            else
+                App.State.Status = "曲线已替换，但没能保存到文件。";
+            RefreshPlan();
+        }
+        else if (w.RecommendedProfile != null)
+        {
+            CalibSessionInfo.Text = $"结论：{w.RecommendedLabel}。没有改动你的曲线，需要的话可以自己照着这个数改。";
+            CalibSessionInfo.Visibility = Visibility.Visible;
+        }
+        FillRounds();
+    }
 
     void OnCalibrate(object sender, RoutedEventArgs e)
     {
@@ -414,6 +482,9 @@ public partial class TestPage : UserControl
         pr.CrossColor = CrossColor;
         pr.CrossDot = ChkCrossDot.IsChecked == true;
         pr.DrillKind = DrillIndex;
+        pr.CalibMultipliers = TxtCalibMult.Text;
+        pr.CalibRounds = CalibRounds();
+        pr.CalibNoAccel = ChkCalibNoAccel.IsChecked == true;
         pr.DrillSeconds = DrillSecondsValue;
         pr.DrillRadiusPx = DrillRadiusValue;
         AppState.SavePrefs();

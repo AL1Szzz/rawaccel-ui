@@ -1,4 +1,5 @@
 using System.Windows;
+using RaCore;
 using RaCore.Model;
 using RaUI.View;
 
@@ -77,6 +78,29 @@ public partial class App : Application
         {
             Headless = true;
             DumpCalib(calibIdx + 1 < e.Args.Length ? e.Args[calibIdx + 1] : @"C:\temp\calib.png");
+            Shutdown();
+            return;
+        }
+
+        // driver round trip for the blind comparison (--calib-push-check): push one candidate, read it
+        // back, restore, and prove the bytes came back. This is the only check that exercises the one
+        // path that can leave somebody's mouse on a curve they never chose.
+        int pushIdx = System.Array.FindIndex(e.Args, a => a == "--calib-push-check");
+        if (pushIdx >= 0)
+        {
+            Headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _ = CalibPushCheckAsync();
+            return;
+        }
+
+        // headless visual check of the blind-comparison report (--dump-calib-report out.png)
+        int reportIdx = System.Array.FindIndex(e.Args, a => a == "--dump-calib-report");
+        if (reportIdx >= 0)
+        {
+            Headless = true;
+            DumpCalibReport(reportIdx + 1 < e.Args.Length ? e.Args[reportIdx + 1] : @"C:\temp\report.png",
+                            StrArg(e.Args, "--stage"));
             Shutdown();
             return;
         }
@@ -261,6 +285,10 @@ public partial class App : Application
         var pi = System.Array.FindIndex(args, a => a == "--page");
         if (pi >= 0 && pi + 1 < args.Length) int.TryParse(args[pi + 1], out page);
 
+        // --height: a card below the fold can only be checked by rendering a taller window
+        int dumpHeight = IntArg(args, "--height");
+        if (dumpHeight <= 0) dumpHeight = 780;
+
         var w = new MainWindow
         {
             WindowStyle = WindowStyle.None,
@@ -269,7 +297,7 @@ public partial class App : Application
             Left = -20000,
             Top = -20000,
             Width = 1220,
-            Height = 780,
+            Height = dumpHeight,
         };
         w.GoToPage(page);
         w.Measure(new Size(w.Width, w.Height));
@@ -277,6 +305,18 @@ public partial class App : Application
         w.UpdateLayout();
         w.Show();   // offscreen + not activated: needed for WPF to complete layout/render
         w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+
+        // --scroll N: park the page's scroll viewer so a card below the fold can be rendered too
+        var si = System.Array.FindIndex(args, a => a == "--scroll");
+        if (si >= 0 && si + 1 < args.Length && double.TryParse(args[si + 1], out var offset))
+        {
+            if (FirstScrollViewer(w) is { } sv)
+            {
+                sv.ScrollToVerticalOffset(offset);
+                w.UpdateLayout();
+                w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+            }
+        }
 
         var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
             (int)w.Width, (int)w.Height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
@@ -290,6 +330,18 @@ public partial class App : Application
 
         w.Close();
         System.Console.WriteLine("dumped " + outPng);
+    }
+
+    static System.Windows.Controls.ScrollViewer? FirstScrollViewer(System.Windows.DependencyObject root)
+    {
+        int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is System.Windows.Controls.ScrollViewer sv) return sv;
+            if (FirstScrollViewer(child) is { } found) return found;
+        }
+        return null;
     }
 
     /// <summary>Renders the fullscreen test window offscreen with a fake pointer position.</summary>
@@ -351,15 +403,22 @@ public partial class App : Application
         return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out var v) ? v : 0;
     }
 
+    static string StrArg(string[] args, string name)
+    {
+        int i = System.Array.FindIndex(args, a => a == name);
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : "";
+    }
+
     /// <summary>Offscreen render of one drill mode: no countdown, no timer, no display change.</summary>
     void DumpDrill(string outPng, int kind)
     {
         var cfg = new DrillWindow.Config
         {
-            Kind = (RaCore.DrillKind)Math.Clamp(kind, 0, 2),
+            Kind = (RaCore.DrillKind)Math.Clamp(kind, 0, 8),
             Seconds = 60,
             RadiusPx = 22,
-            Alive = 3,
+            Alive = RaCore.DrillInfo.DefaultAlive((RaCore.DrillKind)Math.Clamp(kind, 0, 8)),
+            RepTarget = RaCore.DrillInfo.DefaultReps((RaCore.DrillKind)Math.Clamp(kind, 0, 8)),
             CrossArm = 9,
             CrossGap = 3,
             CrossColor = "#FFFFFFFF",
@@ -394,6 +453,62 @@ public partial class App : Application
         };
         w.Show();
         Capture(w, outPng, "calibration");
+    }
+
+    /// <summary>
+    /// End-to-end check of the temporary curve push: capture, push a candidate, read it back,
+    /// restore, and compare the driver's bytes with what was there at the start.
+    /// </summary>
+    async Task CalibPushCheckAsync()
+    {
+        var push = new CurvePush();
+        byte[] before;
+        try { before = RaCore.RaDevice.Read(); }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine("driver unreadable: " + ex.Message);
+            Shutdown();
+            return;
+        }
+
+        if (!push.Capture()) { System.Console.WriteLine("capture failed: " + push.Error); Shutdown(); return; }
+
+        var live = State.SelectedProfile;
+        if (live == null) { System.Console.WriteLine("no profile selected"); Shutdown(); return; }
+
+        var cands = AccelCandidates.Build(live, new[] { 1.5 }, includeNoAccel: false);
+        string run = AccelCandidates.KnobName(live.X.Mode);
+
+        bool pushed = await push.PushAsync(cands[0].Profile);
+        var afterPush = RaCore.RaDevice.Read();
+        System.Console.WriteLine(pushed
+            ? $"push ok: {run} changed and read back identical"
+            : "push FAILED: " + push.Error);
+        System.Console.WriteLine(!afterPush.AsSpan().SequenceEqual(before)
+            ? "the driver really did change (the candidate was not a no-op)"
+            : "WARNING: the driver bytes did not change - this check proved nothing");
+
+        bool restored = await push.RestoreAsync();
+        var afterRestore = RaCore.RaDevice.Read();
+        System.Console.WriteLine(restored && afterRestore.AsSpan().SequenceEqual(before)
+            ? "restore ok: byte-for-byte the settings from before the check"
+            : "RESTORE FAILED: " + (push.RestoreFailure ?? "bytes differ") );
+
+        push.Dispose();
+        Shutdown();
+    }
+
+    /// <summary>Render the blind-comparison report with invented rounds and save it.</summary>
+    static void DumpCalibReport(string outPng, string stage)
+    {
+        var w = new CalibrationSessionWindow(new CalibrationSessionWindow.Options
+        {
+            DebugReport = stage.Length == 0 || stage == "report",
+            DebugStage = stage,
+        });
+        w.Show();
+        Capture(w, outPng, stage.Length > 0 ? stage : "report");
+        w.Close();
     }
 
     /// <summary>Open the calibration dial for a few seconds and print what raw input delivered.</summary>

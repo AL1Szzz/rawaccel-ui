@@ -88,6 +88,30 @@ public sealed partial class AppState
         Status = $"配置已从“{old}”改名为“{name}”，{moved} 个设备的指向已一起更新";
     }
 
+    /// <summary>
+    /// Overwrites the selected profile's curve with another one, keeping its name. Used by the blind
+    /// comparison when the player accepts a result: the name has to survive because devices point at
+    /// profiles by name, and every curve page in the UI is bound to that same object.
+    /// </summary>
+    public void ReplaceProfile(string name, RaCore.Model.ProfileDto replacement)
+    {
+        var p = (name.Length > 0 ? doc.Profiles.FirstOrDefault(x => x.Name == name) : null)
+                ?? SelectedProfile ?? doc.Profiles.FirstOrDefault();
+        if (p == null || replacement == null) { Status = "没有可替换的曲线"; return; }
+
+        int index = doc.Profiles.IndexOf(p);
+        var copy = replacement.Clone();
+        copy.Name = p.Name;
+        if (index < 0) doc.Profiles.Add(copy);
+        else doc.Profiles[index] = copy;
+
+        SyncProfileList();
+        SelectedProfile = doc.Profiles.FirstOrDefault(x => x.Name == p.Name) ?? doc.Profiles.FirstOrDefault();
+        RebuildCurves();
+        Touch();
+        Status = $"「{p.Name}」已替换为盲测选出的那条";
+    }
+
     void SyncProfileList()
     {
         // a driver that holds nothing really means nothing: give the UI one editable profile

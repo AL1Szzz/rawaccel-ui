@@ -36,6 +36,10 @@ public sealed class UiPrefs
     /// <summary>校准时想要的 cm/360，只用来算建议灵敏度。</summary>
     [JsonPropertyName("targetCm360")] public double TargetCm360 { get; set; } = 30;
 
+    [JsonPropertyName("calibMultipliers")] public string CalibMultipliers { get; set; } = "0.5,1.0,1.5,2.0";
+    [JsonPropertyName("calibRounds")] public int CalibRounds { get; set; }
+    [JsonPropertyName("calibNoAccel")] public bool CalibNoAccel { get; set; } = true;
+
     /// <summary>Crosshair drawn at the pointer hotspot during the test (physical pixels).</summary>
     [JsonPropertyName("crossArm")] public double CrossArm { get; set; } = 9;
     [JsonPropertyName("crossGap")] public double CrossGap { get; set; } = 3;

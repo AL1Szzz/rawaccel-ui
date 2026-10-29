@@ -42,7 +42,7 @@
                         <StackPanel>
                             <TextBlock Text="训练场" FontWeight="SemiBold" FontSize="14"/>
                             <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="三个固定项目，跟着上面的分辨率设置一起跑。成绩进下面的历史。"/>
+                                       Text="九个项目，跟着上面的分辨率设置一起跑。成绩进下面的历史。"/>
                             <Grid Margin="0,12,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -57,7 +57,13 @@
                                 <ComboBox x:Name="CmbDrill" Grid.Row="0" Grid.Column="1" Height="28" Margin="6,3,0,3">
                                     <ComboBoxItem Content="网格速击" Tag="0" IsSelected="True"/>
                                     <ComboBoxItem Content="六目标" Tag="1"/>
-                                    <ComboBoxItem Content="跟枪" Tag="2"/>
+                                    <ComboBoxItem Content="人物跟枪" Tag="2"/>
+                                    <ComboBoxItem Content="三目标" Tag="3"/>
+                                    <ComboBoxItem Content="单球连击" Tag="4"/>
+                                    <ComboBoxItem Content="反应单球" Tag="5"/>
+                                    <ComboBoxItem Content="多目标连击" Tag="6"/>
+                                    <ComboBoxItem Content="摆射训练" Tag="7"/>
+                                    <ComboBoxItem Content="背闪复位" Tag="8"/>
                                 </ComboBox>
 
                                 <TextBlock Grid.Row="1" Text="时长 秒" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
@@ -87,6 +93,43 @@
                                     HorizontalAlignment="Left" Click="OnCalibrate"/>
                             <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"
                                        Text="转盘由鼠标原始计数驱动，不经过 Windows 指针加速。转一圈看这段距离有多长，顺手也能反算灵敏度。"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="曲线盲测" FontWeight="SemiBold" FontSize="14"/>
+                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="拿你当前这条曲线做基准，扫一个参数生成几档候选，五档轮流在五个项目上各打一轮，全程不告诉你数值；跑完再让领先档和原值单挑一次，最后给出结论和证据量。"/>
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="130"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="扫描倍率（逗号分隔，须含 1.0）" VerticalAlignment="Center"
+                                           FontSize="12.5" Margin="0,3"
+                                           ToolTip="1.0 是你现在这条曲线。倍率作用于该模式的主参数：classic/jump 是加速度，natural 是衰减率，synchronous 是 motivity，power 是 scale，lut 是查表幅度。"/>
+                                <TextBox x:Name="TxtCalibMult" Grid.Row="0" Grid.Column="1" Text="0.5,1.0,1.5,2.0"
+                                         MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                                <TextBlock Grid.Row="1" Text="总轮数（0 = 全跑，35 轮约 15 分钟）" VerticalAlignment="Center"
+                                           FontSize="12.5" Margin="0,3"/>
+                                <TextBox x:Name="TxtCalibRounds" Grid.Row="1" Grid.Column="1" Text="0"
+                                         MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button x:Name="BtnCalibSession" Content="开始盲测" Style="{StaticResource AccentButton}"
+                                        MinWidth="150" MinHeight="36" Click="OnStartCalibSession"/>
+                                <CheckBox x:Name="ChkCalibNoAccel" Content="加一档无加速对照" IsChecked="True"
+                                          VerticalAlignment="Center" Margin="14,0,0,0" FontSize="12.5"
+                                          Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </StackPanel>
+                            <TextBlock x:Name="CalibSessionInfo" Style="{StaticResource SubtleTextStyle}"
+                                       Margin="0,10,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="盲测期间会临时改驱动里的曲线，测完自动还原，不动 settings.json。中途退出、崩溃也会在关闭时还原；万一还原失败，状态栏会明确报警。"/>
                         </StackPanel>
                     </Border>
 

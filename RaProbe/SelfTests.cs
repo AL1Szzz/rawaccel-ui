@@ -62,6 +62,9 @@ public static class SelfTests
         Console.WriteLine("\n== L. Calibration: the turn, the conversion, and the crosshair ==");
         Section("calibration", CalibrationChecks);
 
+        Console.WriteLine("\n== M. Curve lab: candidates, flick consistency, the blind schedule ==");
+        Section("curvelab", CurveLabChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -561,20 +564,20 @@ public static class SelfTests
         // scoring
         var gridRun = new DrillRun(DrillKind.Gridshot, 60);
         gridRun.Advance(30_000);
-        for (int i = 0; i < 10; i++) gridRun.Click(i < 7);
+        for (int i = 0; i < 10; i++) gridRun.Click(i * 40, i * 25, i < 7);
         Check(gridRun.Shots == 10 && gridRun.Hits == 7, "clicks and hits are counted separately");
         Check(Math.Abs(gridRun.HitRatePct - 70) < 1e-9, "hit rate is hits over clicks (70%)");
         Check(Math.Abs(gridRun.HitsPerMinute - 14) < 1e-9, "7 hits in 30s is 14 per minute");
         Check(!gridRun.Finished, "30s of a 60s round is not finished");
         gridRun.Advance(30_000);
         Check(gridRun.Finished && Math.Abs(gridRun.ElapsedMs - 60_000) < 1e-9, "the round ends on the clock, exactly");
-        gridRun.Click(true);
+        gridRun.Click(400, 250, true);
         Check(gridRun.Hits == 7, "a click after the whistle does not count");
 
         var sixRun = new DrillRun(DrillKind.Sixshot, 60);
-        sixRun.Click(true); sixRun.Click(true); sixRun.Click(true); sixRun.Click(true);
-        sixRun.Click(true, completesSet: true);
-        sixRun.Click(true, completesSet: true);
+        for (int i = 0; i < 4; i++) sixRun.Click(i * 60, 120, true);
+        sixRun.Click(240, 120, true, completesSet: true);
+        sixRun.Click(300, 240, true, completesSet: true);
         Check(sixRun.SetsCleared == 2 && sixRun.Hits == 6, "a set is only counted when its last target falls");
         sixRun.Advance(20_000);
         Check(Math.Abs(sixRun.SecondsPerSet - 10) < 1e-9, "two sets in 20s is 10s per set");
@@ -736,5 +739,265 @@ public static class SelfTests
             $"the UI always has a settings path to save to: {def}");
         Check(Directory.Exists(Path.GetDirectoryName(def)),
             "and its folder really exists, so the first save cannot fail on a missing directory");
+    }
+
+    // ---------- M ----------
+
+    static ProfileDto ProfileWith(string mode, double acceleration = 0.005)
+    {
+        var p = new ProfileDto();
+        p.X.Mode = mode;
+        p.Y.Mode = mode;
+        p.X.Acceleration = acceleration;
+        p.Y.Acceleration = acceleration;
+        return p;
+    }
+
+    static void CurveLabChecks()
+    {
+        // --- which parameter a sweep touches, per mode ---
+        foreach (var (mode, knob) in new[]
+                 {
+                     ("classic", 0.008), ("jump", 0.9), ("natural", 0.4),
+                     ("synchronous", 3.2), ("power", 1.7),
+                 })
+        {
+            var p = ProfileWith(mode);
+            AccelCandidates.Set(p, knob);
+            Check(Math.Abs(AccelCandidates.Get(p) - knob) < 1e-12,
+                $"{mode}: writing the swept parameter and reading it back round-trips");
+            Check(AccelCandidates.Sweepable(p), $"{mode}: has something worth sweeping");
+        }
+
+        var lut = ProfileWith("lut");
+        lut.X.Data = new List<float> { 1.2f, 1.5f, 1.0f };
+        double before = AccelCandidates.Get(lut);
+        AccelCandidates.Set(lut, before * 2);
+        Check(Math.Abs(AccelCandidates.Get(lut) - before * 2) < 1e-4,
+            "lut: doubling the table amplitude doubles the distance from 1.0, not the values");
+        Check(Math.Abs(lut.X.Data[2] - 1.0f) < 1e-6,
+            "lut: a ratio that was exactly 1.0 stays there, so the zero point does not move");
+
+        Check(!AccelCandidates.Sweepable(ProfileWith("noaccel")), "noaccel has no parameter to sweep");
+        Check(AccelCandidates.KnobFor("SYNCHRONOUS") == AccelCandidates.Knob.Amount,
+            "the mode name is matched case-insensitively");
+
+        // --- candidate list ---
+        var baseProfile = ProfileWith("classic", 0.005);
+        var cands = AccelCandidates.Build(baseProfile, new[] { 0.5, 1.0, 1.5, 2.0 }, includeNoAccel: true);
+        Check(cands.Count == 5, "four multipliers plus the no-accel control");
+        Check(cands.Count(c => c.IsBase) == 1, "exactly one candidate is the player's own curve");
+        Check(cands[cands.FindIndex(c => c.IsBase)].KnobValue is > 0.0049 and < 0.0051,
+            "the base candidate carries the original value, not a scaled one");
+        Check(cands[1].KnobValue is > 0.0024 and < 0.0026, "a 0.5 multiplier halves the swept value");
+        Check(cands[0].IsNoAccel && cands[0].Profile.X.Mode == "noaccel",
+            "the control is a different mode, not a weak acceleration");
+        Check(cands.All(c => c.BlindLabel == $"候选 {c.Index + 1}"),
+            "every blind label is an index and nothing else - the value must not leak into the round banner");
+        Check(cands.All(c => !c.BlindLabel.Contains(c.Secret)) && cands.All(c => c.Secret.Length > 0),
+            "the secret text exists but is never the label");
+        Check(baseProfile.X.Acceleration == 0.005, "building candidates does not mutate the live profile");
+        Check(cands[2].Profile.Y.Mode == "classic" && Math.Abs(cands[2].Profile.Y.Acceleration - 0.005) < 1e-9,
+            "both axes are copied, so a candidate cannot silently drop the vertical curve");
+
+        // --- flick consistency ---
+        var even = new FlickStats();
+        even.Add(150, 100); even.Add(400, 267); even.Add(800, 533); even.Add(1400, 933);
+        Check(even.Consistency > 0.98, $"equal px/s in every band reads as consistent ({even.Consistency:0.000})");
+        Check(even.BandSpeeds().Count(v => v > 0) >= 3, "every distance band that got a sample reports a speed");
+
+        var lopsided = new FlickStats();
+        lopsided.Add(150, 60); lopsided.Add(1400, 2000);   // 2500 px/s close in, 700 px/s far out
+        Check(lopsided.Consistency < even.Consistency - 0.4,
+            $"a long flick at a third of the short-flick speed scores far worse ({lopsided.Consistency:0.000} vs {even.Consistency:0.000})");
+        Check(lopsided.Consistency >= 0, "consistency never goes negative");
+
+        var single = new FlickStats();
+        single.Add(300, 200);
+        Check(single.Consistency == 0, "one band cannot be consistent with itself, and says so with 0");
+
+        var emptyFlick = new FlickStats();
+        Check(emptyFlick.Consistency == 0 && emptyFlick.OverallPxPerSec == 0,
+            "no samples reports zero rather than NaN");
+        Check(!emptyFlick.Describe().Contains("NaN"), "the description stays printable when empty");
+
+        var ignores = new FlickStats();
+        ignores.Add(-5, 100); ignores.Add(200, -1); ignores.Add(200, double.NaN);
+        Check(ignores.Samples == 0, "negative distances and non-positive times are dropped, not scored");
+        Check(FlickStats.BandOf(0) == 0 && FlickStats.BandOf(219) == 0 && FlickStats.BandOf(221) == 1,
+            "band edges are upper bounds, so a distance lands in exactly one band");
+        Check(FlickStats.BandOf(99999) == FlickStats.BandEdges.Length - 1, "the last band is open-ended");
+
+        // --- schedule ---
+        var explore = CalibPlan.Explore(5);
+        Check(explore.Count == 25, "five candidates over five drills is 25 rounds");
+        Check(explore.Select(r => (r.CandidateIndex, r.Item)).Distinct().Count() == 25,
+            "every candidate meets every drill exactly once");
+        Check(explore.Where((r, i) => i > 0 && r.CandidateIndex == explore[i - 1].CandidateIndex).Count() == 0,
+            "no two consecutive rounds use the same candidate");
+        Check(explore.Select(r => r.Ordinal).SequenceEqual(Enumerable.Range(1, 25)),
+            "rounds are numbered without gaps");
+
+        var exploreAgain = CalibPlan.Explore(5);
+        Check(explore.SequenceEqual(exploreAgain), "the same seed gives the same order, so a bug can be reproduced");
+
+        var final = CalibPlan.Final(1, 4);
+        Check(final.Count == 10, "the head-to-head is two candidates over five drills");
+        Check(final.Select(r => r.CandidateIndex).Distinct().OrderBy(x => x).SequenceEqual(new[] { 1, 4 }),
+            "and it contains exactly those two");
+
+        // --- ranking ---
+        var results = new List<CalibPlan.RoundResult>();
+        foreach (var r in explore)
+        {
+            // candidate 3 is best everywhere, candidate 0 is worst everywhere
+            double score = r.CandidateIndex == 3 ? 100 : r.CandidateIndex == 0 ? 10 : 50 + r.CandidateIndex;
+            results.Add(new CalibPlan.RoundResult
+            {
+                Round = r, Skill = score,
+                Consistency = r.Item == DrillKind.Tracking ? double.NaN : 0.7,
+            });
+        }
+        var rank = CalibPlan.Rank(results, 5);
+        Check(rank.Leader == 3, "the candidate that won every drill leads");
+        Check(Math.Abs(rank.MeanRank[3] - 1) < 1e-9, "winning everything is a mean rank of 1");
+        Check(rank.Wins[3] == 5, "outright wins are counted per drill");
+        Check(!double.IsNaN(rank.MeanConsistency[3]), "tracking's missing flick is skipped, not averaged in as zero");
+        Check(rank.Order.Count == 5 && rank.Order.Distinct().Count() == 5, "every candidate appears once in the ordering");
+
+        var thin = new List<CalibPlan.RoundResult>
+        {
+            new() { Round = explore.First(r => r.Item == DrillKind.Sixshot), Skill = 10 },
+        };
+        var thinRank = CalibPlan.Rank(thin, 5);
+        Check(thinRank.Order.Count == 5, "candidates with no results still appear, they just rank last");
+
+        // --- verdict ---
+        // a head-to-head as the window would actually build it: the base and one opponent, five drills each
+        List<CalibPlan.RoundResult> Head(int baseIdx, int otherIdx, double baseScore, double otherScore)
+        {
+            var list = new List<CalibPlan.RoundResult>();
+            foreach (var r in CalibPlan.Final(baseIdx, otherIdx))
+                list.Add(new CalibPlan.RoundResult
+                {
+                    Round = r,
+                    Skill = r.CandidateIndex == baseIdx ? baseScore : otherScore,
+                    Consistency = r.Item == DrillKind.Tracking ? double.NaN : 0.8,
+                });
+            return list;
+        }
+
+        int baseIdx = 1;                                        // candidate 1 is the player's own curve
+        var win = CalibPlan.Decide(rank, Head(baseIdx, 3, 50, 60), baseIdx);
+        Check(win.Recommend && win.WinnerIndex == 3 && !win.WinnerIsBase,
+            "a candidate that wins the head-to-head by a clear margin is recommended");
+
+        var tie = CalibPlan.Decide(rank, Head(baseIdx, 3, 50, 50.5), baseIdx);
+        Check(!tie.Recommend && tie.WinnerIsBase && tie.WinnerIndex == baseIdx,
+            "a 1% difference is not enough to tell somebody to change their curve");
+
+        var loss = CalibPlan.Decide(rank, Head(baseIdx, 3, 50, 30), baseIdx);
+        Check(!loss.Recommend && loss.Headline.Contains("先别改"),
+            "losing the head-to-head keeps the player's own curve");
+
+        // winning two drills by a mile and losing three narrowly is not a win: the margin cannot
+        // outvote the count, or one lucky drill would decide the whole curve
+        var few = new List<CalibPlan.RoundResult>();
+        int itemNo = 0;
+        foreach (var r in CalibPlan.Final(baseIdx, 3))
+        {
+            bool isBase = r.CandidateIndex == baseIdx;
+            if (isBase) { itemNo++; continue; }
+            bool bigWin = itemNo <= 2;
+            few.Add(new CalibPlan.RoundResult
+            {
+                Round = r,
+                Skill = bigWin ? 90 : 45,
+                Consistency = r.Item == DrillKind.Tracking ? double.NaN : 0.8,
+            });
+        }
+        foreach (var r in CalibPlan.Final(baseIdx, 3).Where(r => r.CandidateIndex == baseIdx))
+            few.Add(new CalibPlan.RoundResult
+            {
+                Round = r,
+                Skill = few.Any(f => f.Round.Item == r.Item && f.Skill > 80) ? 40 : 50,
+                Consistency = r.Item == DrillKind.Tracking ? double.NaN : 0.8,
+            });
+        var fewVerdict = CalibPlan.Decide(rank, few, baseIdx);
+        Check(fewVerdict.FinalWins == 2 && !fewVerdict.Recommend,
+            $"two big wins and three narrow losses is still a loss ({fewVerdict.FinalWins}/5, +{fewVerdict.RelativeGain * 100:0.#}%)");
+
+        // when the explore already says the player's own curve is best, the head-to-head must still
+        // be against somebody else, or it would be ten rounds of the same curve
+        var baseLeads = CalibPlan.Rank(results.Where(r => r.Round.CandidateIndex != 3).ToList(), 5);
+        int ownIdx = baseLeads.Leader;
+        Check(CalibPlan.Opponent(baseLeads, ownIdx) != ownIdx,
+            "a head-to-head never compares a curve with itself");
+        var keeps = CalibPlan.Decide(baseLeads, Head(ownIdx, CalibPlan.Opponent(baseLeads, ownIdx), 50, 40), ownIdx);
+        Check(keeps.WinnerIsBase && !keeps.Recommend, "and losing that comparison leaves the player's curve alone");
+
+        var upset = CalibPlan.Decide(baseLeads, Head(ownIdx, CalibPlan.Opponent(baseLeads, ownIdx), 40, 50), ownIdx);
+        Check(upset.Recommend && upset.WinnerIndex == CalibPlan.Opponent(baseLeads, ownIdx),
+            "but a runner-up that wins the re-run is allowed to overturn the explore ordering");
+
+        var nothing = CalibPlan.Decide(rank, new List<CalibPlan.RoundResult>(), baseIdx);
+        Check(!nothing.Recommend && nothing.Headline.Contains("不成立"),
+            "an unfinished head-to-head produces no recommendation at all");
+
+        // --- the new drills ---
+        var area = DrillField.Usable(1920, 1080);
+        var rng = new Random(7);
+        var three = DrillField.Three(area, 22, rng);
+        Check(three.Length == 3, "three-shot places three targets");
+        Check(three.All(t => area.Fits(t.x, t.y, 22)), "all three stay inside the play area");
+        double closest = double.MaxValue;
+        for (int i = 0; i < three.Length; i++)
+            for (int j = i + 1; j < three.Length; j++)
+                closest = Math.Min(closest, Math.Sqrt(Math.Pow(three[i].x - three[j].x, 2) + Math.Pow(three[i].y - three[j].y, 2)));
+        Check(closest >= 110, $"no two are close enough to take with one click ({closest:0} px apart)");
+
+        var left = DrillField.FarSpot(area, 22, rng, goLeft: true);
+        var right = DrillField.FarSpot(area, 22, rng, goLeft: false);
+        Check(area.Fits(left.x, left.y, 22) && area.Fits(right.x, right.y, 22), "the flash target lands inside the area");
+        Check(left.x < area.X + 100 && right.x > area.Right - 100, "and it is out at the edge, not near the middle");
+        Check(Math.Abs(right.x - left.x) > area.W * 0.8, "the two sides are a full screen apart, so the return is a real flick");
+
+        Check(DrillField.StrafeStopped(700) && !DrillField.StrafeStopped(699),
+            "the strafe target is stopped exactly from moveMs onward");
+        Check(DrillField.StrafeStopped(1020 + 700) && !DrillField.StrafeStopped(1020 + 699),
+            "and the stop repeats every period");
+        Check(Math.Abs(DrillField.StrafeNextChangeMs(0) - 700) < 1e-9
+              && Math.Abs(DrillField.StrafeNextChangeMs(700) - 320) < 1e-9,
+            "the countdown to the next state change lands on both edges");
+
+        var react = new DrillRun(DrillKind.Reaction, 30);
+        react.Click(10, 10, false);
+        react.Click(10, 10, true);
+        react.Reaction(250);
+        react.Reaction(350);
+        Check(react.Hits == 1 && react.Shots == 2, "a click before the target appears is a miss, not a free pass");
+        Check(Math.Abs(react.MeanReactionMs - 300) < 1e-9, "reaction times average");
+        Check(react.SkillScore is > 0 and < 1, "a reaction round scores on hits, discounted by the spam");
+
+        var flash = new DrillRun(DrillKind.FlashReset, 60) { RepTarget = 8 };
+        for (int i = 0; i < 8; i++) flash.Rep();
+        Check(flash.Finished && flash.RepsDone == 8, "a rep-limited round ends when the reps are done, not on the clock");
+        Check(flash.ElapsedMs == 0, "and it does not need the clock to have moved at all");
+        Check(Math.Abs(flash.SkillScore - 8) < 1e-9, "the flash score is the completed reps");
+
+        var tracker = new DrillRun(DrillKind.Tracking, 20);
+        tracker.Tick(10_000, true, true);
+        tracker.Advance(20_000);
+        Check(Math.Abs(tracker.CoveragePct - 50) < 1e-9,
+            "coverage is measured against the whole round, so holding for half of it is 50%, not 100%");
+        Check(Math.Abs(tracker.SkillScore - 0.5) < 1e-9, "and that is what tracking is ranked on");
+
+        foreach (DrillKind k in Enum.GetValues<DrillKind>())
+        {
+            Check(DrillInfo.Name(k).Length > 0, $"{k} has a name");
+            Check(DrillInfo.DefaultSeconds(k) > 0, $"{k} has a default duration");
+            Check(DrillInfo.DefaultAlive(k) >= 1, $"{k} keeps at least one target alive");
+        }
+        Check(Enum.GetValues<DrillKind>().Length == 9, "all nine drills are reachable from the picker");
     }
 }

@@ -24,6 +24,13 @@ public sealed class TurnMeasure
     public double Sensitivity = 1.5;
     public double Dpi = 600;
 
+    /// <summary>
+    /// How big a turn counts as done. 360 is the full circle; 180 is what the calibration session
+    /// opens with, because a half turn is one comfortable push and a full one often is not - and a
+    /// player who has to lift and re-grip mid-measurement is no longer measuring their turn.
+    /// </summary>
+    public double LapDeg = 360;
+
     /// <summary>Signed horizontal counts since the last reset. Yaw only - a turn is a horizontal act.</summary>
     public long Counts;
     /// <summary>Raw packets seen. Tells "the mouse did not move" apart from "raw input is not arriving".</summary>
@@ -34,8 +41,12 @@ public sealed class TurnMeasure
     public double Cm => CmOf(Counts, Dpi);
 
     /// <summary>0..1, for the arc on screen. A partial turn still reports, it just is not finished.</summary>
-    public double Progress => Math.Clamp(AngleAbsDeg / 360.0, 0, 1);
-    public bool Full => AngleAbsDeg >= 360.0;
+    public double Progress => Math.Clamp(AngleAbsDeg / Math.Max(1, LapDeg), 0, 1);
+    public bool Full => AngleAbsDeg >= LapDeg;
+
+    /// <summary>cm for a full 360 even when the measured lap was a half turn, so both modes report
+    /// the number players actually compare.</summary>
+    public double CmPer360Measured => LapDeg > 0 ? Math.Abs(Cm) * 360.0 / LapDeg : 0;
 
     public void Add(long dx)
     {
