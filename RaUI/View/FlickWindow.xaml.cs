@@ -192,23 +192,24 @@ public partial class FlickWindow : Window
     void UpdateCross()
     {
         var (px, py) = CursorPx();
-        double x = px / scale, y = py / scale;
-        double arm = Math.Max(0, cfg.CrossArm / scale);
-        double gap = Math.Max(0, cfg.CrossGap / scale);
-        double thickPhys = 2.0;                                  // constant on every display
-        double thick = thickPhys / scale;
+        var p = CrosshairGeometry.Place(px, py, cfg.CrossArm, cfg.CrossGap, scale);
 
-        CArmL.Height = thick; CArmR.Height = thick; CArmT.Width = thick; CArmB.Width = thick;
-        CArmL.Width = arm; CArmR.Width = arm; CArmT.Height = arm; CArmB.Height = arm;
-        CArmL.Visibility = CArmR.Visibility = arm > 0 ? Visibility.Visible : Visibility.Hidden;
-        CArmT.Visibility = CArmB.Visibility = arm > 0 ? Visibility.Visible : Visibility.Hidden;
-        CDot.Width = thick; CDot.Height = thick;
+        CArmL.Width = p.Left.W; CArmL.Height = p.Left.H;
+        CArmR.Width = p.Right.W; CArmR.Height = p.Right.H;
+        CArmT.Width = p.Top.W; CArmT.Height = p.Top.H;
+        CArmB.Width = p.Bottom.W; CArmB.Height = p.Bottom.H;
+        CDot.Width = p.Dot.W; CDot.Height = p.Dot.H;
 
-        Canvas.SetLeft(CArmL, x - gap - arm); Canvas.SetTop(CArmL, y - thick / 2);
-        Canvas.SetLeft(CArmR, x + gap); Canvas.SetTop(CArmR, y - thick / 2);
-        Canvas.SetTop(CArmT, y - gap - arm); Canvas.SetLeft(CArmT, x - thick / 2);
-        Canvas.SetTop(CArmB, y + gap); Canvas.SetLeft(CArmB, x - thick / 2);
-        Canvas.SetTop(CDot, y - thick / 2); Canvas.SetLeft(CDot, x - thick / 2);
+        // arm length 0 means "dot only": the arms collapse to nothing instead of drawing a stub
+        bool arms = p.Left.W > 0;
+        CArmL.Visibility = CArmR.Visibility = arms ? Visibility.Visible : Visibility.Hidden;
+        CArmT.Visibility = CArmB.Visibility = arms ? Visibility.Visible : Visibility.Hidden;
+
+        Canvas.SetLeft(CArmL, p.Left.X); Canvas.SetTop(CArmL, p.Left.Y);
+        Canvas.SetLeft(CArmR, p.Right.X); Canvas.SetTop(CArmR, p.Right.Y);
+        Canvas.SetLeft(CArmT, p.Top.X); Canvas.SetTop(CArmT, p.Top.Y);
+        Canvas.SetLeft(CArmB, p.Bottom.X); Canvas.SetTop(CArmB, p.Bottom.Y);
+        Canvas.SetLeft(CDot, p.Dot.X); Canvas.SetTop(CDot, p.Dot.Y);
     }
 
     void OnPointerMove(object sender, MouseEventArgs e) => UpdateCross();
