@@ -39,6 +39,8 @@ public sealed class UiPrefs
     [JsonPropertyName("calibMultipliers")] public string CalibMultipliers { get; set; } = "0.5,1.0,1.5,2.0";
     [JsonPropertyName("calibRounds")] public int CalibRounds { get; set; }
     [JsonPropertyName("calibNoAccel")] public bool CalibNoAccel { get; set; } = true;
+    /// <summary>盲测方式：0 = 两轴同步扫一个参数，1 = 手腕流分轴。</summary>
+    [JsonPropertyName("calibPlan")] public int CalibPlan { get; set; }
 
     /// <summary>Crosshair drawn at the pointer hotspot during the test (physical pixels).</summary>
     [JsonPropertyName("crossArm")] public double CrossArm { get; set; } = 9;

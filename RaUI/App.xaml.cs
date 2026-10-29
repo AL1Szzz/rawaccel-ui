@@ -461,9 +461,10 @@ public partial class App : Application
     /// </summary>
     async Task CalibPushCheckAsync()
     {
-        var push = new CurvePush();
-        byte[] before;
-        try { before = RaCore.RaDevice.Read(); }
+        var live = State.SelectedProfile;
+        if (live == null) { System.Console.WriteLine("no profile selected"); Shutdown(); return; }
+
+        try { _ = RaCore.RaDevice.Read(); }
         catch (Exception ex)
         {
             System.Console.WriteLine("driver unreadable: " + ex.Message);
@@ -471,31 +472,41 @@ public partial class App : Application
             return;
         }
 
-        if (!push.Capture()) { System.Console.WriteLine("capture failed: " + push.Error); Shutdown(); return; }
+        // Both families, because they take different paths through the driver: the uniform one only
+        // scales numbers, the wrist one also flips the profile to by-component and writes a vertical
+        // curve the driver was never asked to use. A check that only covered the first would pass
+        // while the feature it is guarding stayed broken.
+        await CheckOne("两轴同步 ×1.5", AccelCandidates.Build(live, new[] { 1.5 }, includeNoAccel: false)[0]);
+        await CheckOne("手腕流 ×2", AccelCandidates.BuildWrist(live, new[] { 2.0 }, includeNoAccel: false)[0]);
 
-        var live = State.SelectedProfile;
-        if (live == null) { System.Console.WriteLine("no profile selected"); Shutdown(); return; }
-
-        var cands = AccelCandidates.Build(live, new[] { 1.5 }, includeNoAccel: false);
-        string run = AccelCandidates.KnobName(live.X.Mode);
-
-        bool pushed = await push.PushAsync(cands[0].Profile);
-        var afterPush = RaCore.RaDevice.Read();
-        System.Console.WriteLine(pushed
-            ? $"push ok: {run} changed and read back identical"
-            : "push FAILED: " + push.Error);
-        System.Console.WriteLine(!afterPush.AsSpan().SequenceEqual(before)
-            ? "the driver really did change (the candidate was not a no-op)"
-            : "WARNING: the driver bytes did not change - this check proved nothing");
-
-        bool restored = await push.RestoreAsync();
-        var afterRestore = RaCore.RaDevice.Read();
-        System.Console.WriteLine(restored && afterRestore.AsSpan().SequenceEqual(before)
-            ? "restore ok: byte-for-byte the settings from before the check"
-            : "RESTORE FAILED: " + (push.RestoreFailure ?? "bytes differ") );
-
-        push.Dispose();
         Shutdown();
+
+        // A fresh CurvePush per candidate on purpose: one instance restores once, so reusing it would
+        // make the second restore a no-op and leave the driver holding the second candidate.
+        async Task CheckOne(string what, AccelCandidates.Candidate cand)
+        {
+            byte[] before;
+            try { before = RaCore.RaDevice.Read(); }
+            catch (Exception ex) { System.Console.WriteLine($"{what}: driver unreadable - {ex.Message}"); return; }
+
+            using var push = new CurvePush();
+            if (!push.Capture()) { System.Console.WriteLine($"{what}: capture failed - {push.Error}"); return; }
+
+            bool pushed = await push.PushAsync(cand.Profile);
+            var afterPush = RaCore.RaDevice.Read();
+            System.Console.WriteLine(pushed
+                ? $"{what}: push ok, read back identical"
+                : $"{what}: push FAILED - " + push.Error);
+            System.Console.WriteLine(!afterPush.AsSpan().SequenceEqual(before)
+                ? $"{what}: the driver really did change (the candidate was not a no-op)"
+                : $"{what}: WARNING - the driver bytes did not change, this check proved nothing");
+
+            bool restored = await push.RestoreAsync();
+            var afterRestore = RaCore.RaDevice.Read();
+            System.Console.WriteLine(restored && afterRestore.AsSpan().SequenceEqual(before)
+                ? $"{what}: restore ok, byte-for-byte the settings from before the check"
+                : $"{what}: RESTORE FAILED - " + (push.RestoreFailure ?? "bytes differ"));
+        }
     }
 
     /// <summary>Render the blind-comparison report with invented rounds and save it.</summary>

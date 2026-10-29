@@ -74,8 +74,21 @@ public partial class DrillWindow : Window
     readonly List<DrillTarget> targets = new();
     readonly Random rng;
     readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
-    readonly DispatcherTimer tick = new() { Interval = TimeSpan.FromMilliseconds(8) };
     readonly DispatcherTimer hud = new() { Interval = TimeSpan.FromMilliseconds(120) };
+
+    /// <summary>
+    /// Watchdog for the render loop. Rendering is what keeps the round moving, and WPF stops raising
+    /// it while the window is occluded or minimised - without this, a drill that lost its frames
+    /// would also lose its clock and never end. 250ms is slow enough to cost nothing and fast enough
+    /// that a stalled frame does not freeze the score.
+    /// </summary>
+    readonly DispatcherTimer watchdog = new() { Interval = TimeSpan.FromMilliseconds(250) };
+
+    /// <summary>
+    /// The radius actually drawn: what the player asked for, but never below what the drill needs.
+    /// Tracking on a 1440p field with a 22px dot is a pixel hunt, so it has a floor of its own.
+    /// </summary>
+    readonly double radiusPx;
 
     double scale = 1.0;
     double screenW = 1920, screenH = 1080;
@@ -84,8 +97,20 @@ public partial class DrillWindow : Window
     double lastTickMs, sessionStartedMs;
     bool running, changingMode, countdownCancelled, sessionReported, buttonHeld;
     double tvx, tvy;
-    Ellipse? tracker;
+    TranslateTransform? trackerTf;
+    TranslateTransform? crossTf;
     string endReason = "";
+
+    // The round runs on the render loop instead of a DispatcherTimer. A Win32 timer is quantised to
+    // ~15.6ms and drifts against vsync however small you make the interval, which is exactly the
+    // judder a moving target shows worst; Rendering fires once per composed frame, so the ball lands
+    // on the frame that gets shown.
+    bool renderHooked;
+
+    // Where the window's top-left is on screen, in physical pixels. Cached because the old code
+    // asked PointToScreen on every single tick, and a fullscreen window does not move mid-round.
+    double originX, originY;
+    bool originKnown;
 
     // reaction: hidden until its delay runs out, then one deliberate shot
     bool reactVisible;
@@ -113,12 +138,20 @@ public partial class DrillWindow : Window
         this.cfg = cfg;
         run = new DrillRun(cfg.Kind, cfg.Seconds) { RepTarget = cfg.RepTarget };
         rng = new Random(cfg.Seed);
+        radiusPx = cfg.RadiusPx > 0
+            ? Math.Max(cfg.RadiusPx, DrillInfo.MinRadiusPx(cfg.Kind))
+            : DrillInfo.DefaultRadiusPx(cfg.Kind);
         if (cfg.DebugCursorPx is not null) { screenW = 1920; screenH = 1080; }
         InitializeComponent();
         SourceInitialized += OnSourceInit;
         Loaded += OnLoaded;
-        tick.Tick += (_, _) => OnTick();
         hud.Tick += (_, _) => { if (running) BannerText.Text = Banner(); };
+        // dt comes from the stopwatch, so a watchdog tick overlapping a render tick splits the same
+        // elapsed time between them instead of counting it twice.
+        watchdog.Tick += (_, _) =>
+        {
+            if (running && clock.Elapsed.TotalMilliseconds - lastTickMs > 150) OnTick();
+        };
     }
 
     // ---------- window setup ----------
@@ -165,6 +198,7 @@ public partial class DrillWindow : Window
         }
 
         area = DrillField.Usable(screenW, screenH);
+        RefreshOrigin();
     }
 
     void OnLoaded(object sender, RoutedEventArgs e)
@@ -197,21 +231,51 @@ public partial class DrillWindow : Window
         return cfg.BlindLabel.Length > 0 ? $"[{cfg.BlindLabel}] {hudText}" : hudText;
     }
 
+    void RefreshOrigin()
+    {
+        var o = PointToScreen(new Point(0, 0));
+        originX = o.X; originY = o.Y; originKnown = true;
+    }
+
     (double x, double y) CursorPx()
     {
         if (cfg.DebugCursorPx is { } dbg) return dbg;
         GetCursorPos(out var p);
-        var origin = PointToScreen(new Point(0, 0));
-        return (p.X - origin.X, p.Y - origin.Y);
+        if (!originKnown) RefreshOrigin();
+        return (p.X - originX, p.Y - originY);
     }
 
     // ---------- crosshair ----------
 
+    /// <summary>
+    /// Sizes and places the five crosshair pieces once, around the origin, and gives the parent
+    /// canvas one transform. Moving the crosshair is then a translation on the render thread instead
+    /// of four Width/Height writes and eight Canvas.Left/Top writes per frame, each of which used to
+    /// invalidate layout while the tracking target was trying to move smoothly.
+    /// </summary>
     void PaintCross()
     {
         var b = Brush(cfg.CrossColor);
         CArmL.Fill = b; CArmR.Fill = b; CArmT.Fill = b; CArmB.Fill = b; CDot.Fill = b;
+
+        var p = CrosshairGeometry.Place(0, 0, cfg.CrossArm, cfg.CrossGap, scale);
+        Place(CArmL, p.Left); Place(CArmR, p.Right);
+        Place(CArmT, p.Top); Place(CArmB, p.Bottom);
+        Place(CDot, p.Dot);
+
+        bool arms = p.Left.W > 0;
+        CArmL.Visibility = CArmR.Visibility = arms ? Visibility.Visible : Visibility.Hidden;
+        CArmT.Visibility = CArmB.Visibility = arms ? Visibility.Visible : Visibility.Hidden;
         CDot.Visibility = cfg.CrossDot ? Visibility.Visible : Visibility.Hidden;
+
+        crossTf = new TranslateTransform(0, 0);
+        Cross.RenderTransform = crossTf;
+    }
+
+    static void Place(System.Windows.Shapes.Rectangle r, RaCore.CrossRect c)
+    {
+        r.Width = c.W; r.Height = c.H;
+        Canvas.SetLeft(r, c.X); Canvas.SetTop(r, c.Y);
     }
 
     static SolidColorBrush Brush(string hex)
@@ -226,27 +290,19 @@ public partial class DrillWindow : Window
 
     void UpdateCross()
     {
+        if (crossTf == null) return;
         var (px, py) = CursorPx();
-        var p = CrosshairGeometry.Place(px, py, cfg.CrossArm, cfg.CrossGap, scale);
-
-        CArmL.Width = p.Left.W; CArmL.Height = p.Left.H;
-        CArmR.Width = p.Right.W; CArmR.Height = p.Right.H;
-        CArmT.Width = p.Top.W; CArmT.Height = p.Top.H;
-        CArmB.Width = p.Bottom.W; CArmB.Height = p.Bottom.H;
-        CDot.Width = p.Dot.W; CDot.Height = p.Dot.H;
-
-        bool arms = p.Left.W > 0;
-        CArmL.Visibility = CArmR.Visibility = arms ? Visibility.Visible : Visibility.Hidden;
-        CArmT.Visibility = CArmB.Visibility = arms ? Visibility.Visible : Visibility.Hidden;
-
-        Canvas.SetLeft(CArmL, p.Left.X); Canvas.SetTop(CArmL, p.Left.Y);
-        Canvas.SetLeft(CArmR, p.Right.X); Canvas.SetTop(CArmR, p.Right.Y);
-        Canvas.SetLeft(CArmT, p.Top.X); Canvas.SetTop(CArmT, p.Top.Y);
-        Canvas.SetLeft(CArmB, p.Bottom.X); Canvas.SetTop(CArmB, p.Bottom.Y);
-        Canvas.SetLeft(CDot, p.Dot.X); Canvas.SetTop(CDot, p.Dot.Y);
+        crossTf.X = px / scale;
+        crossTf.Y = py / scale;
     }
 
-    void OnPointerMove(object sender, MouseEventArgs e) => UpdateCross();
+    /// <summary>
+    /// Deliberately does nothing. A mouse at 4-8kHz raises far more WM_MOUSEMOVE messages than there
+    /// are frames, and updating the crosshair in the handler meant dozens of layout invalidations per
+    /// frame, which is what made the moving target stutter. The render loop below already moves it
+    /// once per composed frame, which is the fastest it can be seen anyway.
+    /// </summary>
+    void OnPointerMove(object sender, MouseEventArgs e) { }
 
     // ---------- layout ----------
 
@@ -269,7 +325,7 @@ public partial class DrillWindow : Window
         var area = Field();
         targets.Clear();
         nextId = 1;
-        resetRingPx = Math.Max(18, cfg.RadiusPx * 0.9);
+        resetRingPx = Math.Max(18, radiusPx * 0.9);
 
         switch (cfg.Kind)
         {
@@ -284,7 +340,7 @@ public partial class DrillWindow : Window
             case DrillKind.Tracking:
             case DrillKind.Strafe:
                 double cx = area.X + area.W / 2, cy = area.Y + area.H / 2;
-                targets.Add(new DrillTarget(nextId++, cx, cy, cfg.RadiusPx));
+                targets.Add(new DrillTarget(nextId++, cx, cy, radiusPx));
                 double a = rng.NextDouble() * Math.PI * 2;
                 tvx = Math.Cos(a) * cfg.TrackSpeedPx;
                 tvy = Math.Sin(a) * cfg.TrackSpeedPx;
@@ -292,9 +348,9 @@ public partial class DrillWindow : Window
 
             case DrillKind.ThreeShot:
             case DrillKind.MultiChain:
-                foreach (var (x, y) in DrillField.Spread(area, cfg.RadiusPx, rng, Math.Max(1, cfg.Alive),
-                                                         Math.Max(160, cfg.RadiusPx * 5)))
-                    targets.Add(new DrillTarget(nextId++, x, y, cfg.RadiusPx));
+                foreach (var (x, y) in DrillField.Spread(area, radiusPx, rng, Math.Max(1, cfg.Alive),
+                                                         Math.Max(160, radiusPx * 5)))
+                    targets.Add(new DrillTarget(nextId++, x, y, radiusPx));
                 break;
 
             case DrillKind.SingleChain:
@@ -302,9 +358,13 @@ public partial class DrillWindow : Window
                 break;
 
             case DrillKind.Reaction:
-                reactVisible = false;
+                // offscreen dumps have no clock, so the target is shown outright; a real round keeps
+                // the screen empty until its delay runs out
+                bool showNow = cfg.DebugStatic || cfg.DebugCursorPx is not null;
+                reactVisible = showNow;
                 reactAppearAtMs = 0;
-                reactNextAtMs = 400 + rng.NextDouble() * 1100;
+                reactNextAtMs = showNow ? 0 : 400 + rng.NextDouble() * 1100;
+                if (showNow) SpawnScattered(1);
                 break;
 
             case DrillKind.FlashReset:
@@ -317,7 +377,7 @@ public partial class DrillWindow : Window
 
     void SpawnAtFreeCell()
     {
-        var cells = DrillField.Grid(area, cfg.Cols, cfg.Rows);
+        var cells = DrillField.Grid(Field(), cfg.Cols, cfg.Rows);
         var taken = new HashSet<int>();
         for (int i = 0; i < targets.Count; i++)
         {
@@ -333,22 +393,23 @@ public partial class DrillWindow : Window
         var pick = DrillField.FreeCells(cells.Length, taken, 1, rng);
         if (pick.Count == 0) return;
         var (x, y) = cells[pick[0]];
-        targets.Add(new DrillTarget(nextId++, x, y, cfg.RadiusPx));
+        targets.Add(new DrillTarget(nextId++, x, y, radiusPx));
     }
 
+    /// <summary>Six spots, re-jittered from the round's own rng, so the next set is a new set.</summary>
     void SpawnSix()
     {
-        foreach (var (x, y) in DrillField.Six(area))
-            targets.Add(new DrillTarget(nextId++, x, y, cfg.RadiusPx));
+        foreach (var (x, y) in DrillField.Six(Field(), rng, radiusPx))
+            targets.Add(new DrillTarget(nextId++, x, y, radiusPx));
     }
 
     void SpawnScattered(int count)
     {
         for (int i = 0; i < count; i++)
         {
-            var pts = DrillField.Spread(area, cfg.RadiusPx, rng, 1, Math.Max(160, cfg.RadiusPx * 5));
+            var pts = DrillField.Spread(Field(), radiusPx, rng, 1, Math.Max(160, radiusPx * 5));
             if (pts.Length == 0) return;
-            targets.Add(new DrillTarget(nextId++, pts[0].x, pts[0].y, cfg.RadiusPx));
+            targets.Add(new DrillTarget(nextId++, pts[0].x, pts[0].y, radiusPx));
         }
     }
 
@@ -357,8 +418,8 @@ public partial class DrillWindow : Window
         var area = Field();
         if (flashPhase == 0)
         {
-            var (x, y) = DrillField.FarSpot(area, cfg.RadiusPx, rng, flashGoLeft);
-            targets.Add(new DrillTarget(nextId++, x, y, cfg.RadiusPx));
+            var (x, y) = DrillField.FarSpot(area, radiusPx, rng, flashGoLeft);
+            targets.Add(new DrillTarget(nextId++, x, y, radiusPx));
         }
         else
         {
@@ -370,10 +431,11 @@ public partial class DrillWindow : Window
     void DrawAll()
     {
         Surface.Children.Clear();
-        tracker = null;
+        trackerTf = null;
         foreach (var t in targets)
         {
             bool hollow = cfg.Kind == DrillKind.FlashReset && flashPhase == 1;
+            bool moving = cfg.Kind is DrillKind.Tracking or DrillKind.Strafe;
             var e = new Ellipse
             {
                 Width = t.RadiusPx * 2 / scale,
@@ -383,19 +445,33 @@ public partial class DrillWindow : Window
                 StrokeThickness = (hollow ? 3 : 1.5) / scale,
                 IsHitTestVisible = false,
             };
-            Canvas.SetLeft(e, (t.X - t.RadiusPx) / scale);
-            Canvas.SetTop(e, (t.Y - t.RadiusPx) / scale);
+
+            if (moving)
+            {
+                // moved by transform, not by Canvas.Left: re-layouting the canvas every frame while
+                // the target crosses it is what turned a smooth bounce into a stutter
+                Canvas.SetLeft(e, 0);
+                Canvas.SetTop(e, 0);
+                var tf = new TranslateTransform(0, 0);
+                e.RenderTransform = tf;
+                trackerTf = tf;
+            }
+            else
+            {
+                Canvas.SetLeft(e, (t.X - t.RadiusPx) / scale);
+                Canvas.SetTop(e, (t.Y - t.RadiusPx) / scale);
+            }
             Surface.Children.Add(e);
-            if (cfg.Kind is DrillKind.Tracking or DrillKind.Strafe) tracker = e;
         }
+        MoveTracker();
     }
 
     void MoveTracker()
     {
-        if (tracker == null || targets.Count == 0) return;
+        if (trackerTf == null || targets.Count == 0) return;
         var t = targets[0];
-        Canvas.SetLeft(tracker, (t.X - t.RadiusPx) / scale);
-        Canvas.SetTop(tracker, (t.Y - t.RadiusPx) / scale);
+        trackerTf.X = (t.X - t.RadiusPx) / scale;
+        trackerTf.Y = (t.Y - t.RadiusPx) / scale;
     }
 
     /// <summary>The target under the pointer, or none. Drills never give credit for a near miss.</summary>
@@ -430,11 +506,32 @@ public partial class DrillWindow : Window
         sessionStartedMs = clock.Elapsed.TotalMilliseconds;
         lastTickMs = sessionStartedMs;
         run.ElapsedMs = 0;
+        RefreshOrigin();
         Seed();
-        tick.Start();
+        HookRender();
         hud.Start();
+        watchdog.Start();
         BannerText.Text = Banner();
         UpdateCross();
+    }
+
+    void HookRender()
+    {
+        if (renderHooked) return;
+        renderHooked = true;
+        CompositionTarget.Rendering += OnRender;
+    }
+
+    void UnhookRender()
+    {
+        if (!renderHooked) return;
+        renderHooked = false;
+        CompositionTarget.Rendering -= OnRender;
+    }
+
+    void OnRender(object? sender, EventArgs e)
+    {
+        if (running) OnTick();
     }
 
     void OnTick()
@@ -450,7 +547,7 @@ public partial class DrillWindow : Window
         if (moving && targets.Count > 0 && !frozen)
         {
             var t = targets[0];
-            var (x, y, vx, vy) = DrillField.StepTracker(t.X, t.Y, tvx, tvy, dt, area, t.RadiusPx);
+            var (x, y, vx, vy) = DrillField.StepTracker(t.X, t.Y, tvx, tvy, dt, Field(), t.RadiusPx);
             tvx = vx; tvy = vy;
             targets[0] = t with { X = x, Y = y };
             MoveTracker();
@@ -468,7 +565,10 @@ public partial class DrillWindow : Window
             {
                 reactVisible = true;
                 reactAppearAtMs = run.ElapsedMs;
+                // the old code spawned and never drew: the target went into the list, a click on it
+                // scored, and the screen stayed empty for the whole round
                 SpawnScattered(1);
+                DrawAll();
             }
         }
 
@@ -578,8 +678,9 @@ public partial class DrillWindow : Window
     {
         endReason = reason;
         running = false;
-        tick.Stop();
+        UnhookRender();
         hud.Stop();
+        watchdog.Stop();
         if (!sessionReported)
         {
             sessionReported = true;
@@ -601,8 +702,9 @@ public partial class DrillWindow : Window
 
     void OnClosed(object sender, EventArgs e)
     {
-        tick.Stop();
+        UnhookRender();
         hud.Stop();
+        watchdog.Stop();
         countdownCancelled = true;
         running = false;
         RestoreDisplay();

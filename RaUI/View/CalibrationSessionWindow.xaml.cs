@@ -38,6 +38,8 @@ public partial class CalibrationSessionWindow : Window
         public double GameSens = 1.5;
         public double[] Multipliers = AccelCandidates.DefaultMultipliers;
         public bool IncludeNoAccel = true;
+        /// <summary>Uniform scales both axes together; Wrist pushes the axes apart (see AccelCandidates).</summary>
+        public Plan Family = Plan.Uniform;
         /// <summary>0 = every round; a smaller number makes the session a demo you can actually finish.</summary>
         public int MaxRounds;
         /// <summary>Test hook: invent a plausible set of rounds and jump straight to the report.</summary>
@@ -85,14 +87,18 @@ public partial class CalibrationSessionWindow : Window
             return;
         }
 
-        candidates.AddRange(AccelCandidates.Build(live, opts.Multipliers, opts.IncludeNoAccel));
+        candidates.AddRange(AccelCandidates.BuildFor(opts.Family, live, opts.Multipliers, opts.IncludeNoAccel));
         baseIndex = candidates.FindIndex(c => c.IsBase);
         if (baseIndex < 0) baseIndex = 0;
 
         string mode = (live.X.Mode ?? "").Trim().ToLowerInvariant();
         string knob = AccelCandidates.KnobName(mode);
+        string what = opts.Family == Plan.Wrist
+            ? "只调「手腕流强度」这一个数：它把水平的起始阈值往后推、垂直的往前推，两轴强度同时按倍率走"
+            : $"只扫「{knob}」这一个参数（水平和垂直一起扫，不再只动水平那一轴）";
         IntroText.Text =
-            $"拿你现在这条曲线（{mode}）做基准，只扫「{knob}」这一个参数，其余原样复制，生成 {candidates.Count} 档候选" +
+            $"{AccelCandidates.Describe(live, opts.Family)}\n\n" +
+            $"拿你现在这条曲线（{mode}）做基准，{what}，其余原样复制，生成 {candidates.Count} 档候选" +
             $"（其中一档就是你现在这条，一档是完全不加加速的对照）。\n\n" +
             $"每档在下面五个项目上各打一轮，每轮 3 秒准备 + 15 秒计分，顺序打乱且相邻两轮不重复同一档。" +
             $"数值全程隐藏 —— 你只会看到「候选 N」，因为知道自己在打哪一档的人，打法会变。\n\n" +

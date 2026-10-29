@@ -7,7 +7,7 @@ namespace RaCore;
 /// The nine match the set the desktop aim trainers settled on, because each one loads hand control
 /// differently and a curve that helps one can hurt another:
 ///   Gridshot      many fixed cells, wide snapping
-///   Sixshot       six fixed spots, a repeated route
+///   Sixshot       six spots on a 3x2 lattice, re-jittered every set
 ///   Tracking      one moving target, continuous pressure
 ///   ThreeShot     three scattered targets, long flicks
 ///   SingleChain   one target, reappears immediately - steady mid-range rhythm
@@ -83,18 +83,33 @@ public static class DrillField
     }
 
     /// <summary>
-    /// Sixshot: six fixed positions, three up and three down. Fixed rather than random because the
-    /// drill is about the route between them - a random layout turns it into gridshot with fewer targets.
+    /// Sixshot: six spots on a 3x2 lattice, each one jittered inside its own cell and re-rolled for
+    /// every set. They were six fixed points, which turned a minute of sixshot into the same six
+    /// flicks over and over - it trained a route through known dots instead of a hand.
+    ///
+    /// One point per cell rather than a free scatter: a scatter can put two targets close enough to
+    /// take with one click, and "did that count" is not a thing a drill should ask. The jitter is
+    /// capped at 0.7 of the room a cell has, which keeps neighbours at least a couple of hundred px
+    /// apart at any sane screen size. Seeded, so a dump and a self test can replay a set exactly.
     /// </summary>
-    public static (double x, double y)[] Six(Area a)
+    public static (double x, double y)[] Six(Area a, Random rng, double radiusPx = 22, int cols = 3, int rows = 2)
     {
-        double cx = a.X + a.W / 2, cy = a.Y + a.H / 2;
-        double dx = a.W * 0.30, dy = a.H * 0.22;
-        return new[]
+        cols = Math.Max(1, cols);
+        rows = Math.Max(1, rows);
+        double cw = a.W / cols, ch = a.H / rows;
+        double pad = Math.Max(0, radiusPx) + 6;
+        double jx = Math.Max(0, cw / 2 - pad) * 0.7;
+        double jy = Math.Max(0, ch / 2 - pad) * 0.7;
+
+        var list = new (double, double)[cols * rows];
+        for (int i = 0; i < list.Length; i++)
         {
-            (cx - dx, cy - dy), (cx, cy - dy), (cx + dx, cy - dy),
-            (cx - dx, cy + dy), (cx, cy + dy), (cx + dx, cy + dy),
-        };
+            int c = i % cols, r = i / cols;
+            double x = a.X + cw * (c + 0.5) + (rng.NextDouble() * 2 - 1) * jx;
+            double y = a.Y + ch * (r + 0.5) + (rng.NextDouble() * 2 - 1) * jy;
+            list[i] = (x, y);
+        }
+        return list;
     }
 
     /// <summary>Threeshot: three spots thrown wide, never closer together than minGap.</summary>
@@ -388,7 +403,7 @@ public static class DrillInfo
     public static string Hint(DrillKind k) => k switch
     {
         DrillKind.Gridshot => "点掉一个，新的就出现在别的格子里 · 左键 · Esc 退出",
-        DrillKind.Sixshot => "六个全点掉才算一组，下一组回到同样的位置 · 左键 · Esc 退出",
+        DrillKind.Sixshot => "六个全点掉才算一组，下一组会重新排位置 · 左键 · Esc 退出",
         DrillKind.Tracking => "按住左键，把准星一直压在目标上 · 松手不计时不扣分 · Esc 退出",
         DrillKind.ThreeShot => "三个分散的目标，跨越大半个屏幕地甩 · 左键 · Esc 退出",
         DrillKind.SingleChain => "就一个球，点掉立刻在别处出现 · 保持节奏 · 左键 · Esc 退出",
@@ -406,6 +421,26 @@ public static class DrillInfo
         DrillKind.ThreeShot => 3,
         DrillKind.MultiChain => 5,
         _ => 1,
+    };
+
+    /// <summary>
+    /// The smallest target this drill will draw, however small the player asked for. Tracking asks
+    /// for more than the click drills: its target is the thing being followed across a full screen,
+    /// and a 22px dot out at the edge is a pixel hunt dressed up as a tracking drill.
+    /// </summary>
+    public static double MinRadiusPx(DrillKind k) => k switch
+    {
+        DrillKind.Tracking => 34,
+        DrillKind.Strafe => 28,
+        _ => 0,
+    };
+
+    /// <summary>What the radius box offers for this drill before the player touches it.</summary>
+    public static double DefaultRadiusPx(DrillKind k) => k switch
+    {
+        DrillKind.Tracking => 36,
+        DrillKind.Strafe => 30,
+        _ => 22,
     };
 
     public static double DefaultSeconds(DrillKind k) => k switch

@@ -528,15 +528,40 @@ public static class SelfTests
             "columns are evenly spaced further apart than a target is wide");
         Check(stepY > 22 * 2, "rows are far enough apart not to touch");
 
-        var six = DrillField.Six(area);
+        var rngSix = new Random(7);
+        var six = DrillField.Six(area, rngSix, 22);
         Check(six.Length == 6, "sixshot places six targets");
         Check(six.All(p => area.Fits(p.x, p.y, 22)), "all six are inside the usable area");
-        double cx = area.X + area.W / 2, cy = area.Y + area.H / 2;
-        Check(Math.Abs(six.Average(p => p.x) - cx) < 1e-6 && Math.Abs(six.Average(p => p.y) - cy) < 1e-6,
-            "the six are centred on the field");
-        Check(six[0].y == six[1].y && six[0].y == six[2].y && six[3].y == six[4].y && six[3].y == six[5].y,
-            "two rows of three, not a scatter");
-        Check(six[0].y < six[3].y, "row one sits above row two");
+
+        double sixClosest = double.MaxValue;
+        for (int i = 0; i < six.Length; i++)
+            for (int j = i + 1; j < six.Length; j++)
+                sixClosest = Math.Min(sixClosest,
+                    Math.Sqrt(Math.Pow(six[i].x - six[j].x, 2) + Math.Pow(six[i].y - six[j].y, 2)));
+        Check(sixClosest > 2 * 22 + 80,
+            $"no two of the six are close enough to take with one click ({sixClosest:0} px apart)");
+
+        // one per cell of a 3x2 lattice: spread out, but re-rolled rather than pinned to six dots
+        var cellUse = new int[6];
+        foreach (var p in six)
+        {
+            int c = Math.Clamp((int)Math.Floor((p.x - area.X) / (area.W / 3)), 0, 2);
+            int r = Math.Clamp((int)Math.Floor((p.y - area.Y) / (area.H / 2)), 0, 1);
+            cellUse[r * 3 + c]++;
+        }
+        Check(cellUse.All(n => n == 1), "one target per cell of the 3x2 lattice, every cell used");
+
+        var sixSameSeed = DrillField.Six(area, new Random(7), 22);
+        Check(sixSameSeed.SequenceEqual(six), "the same seed lays a set out identically, so a round can be replayed");
+        var sixNextSeed = DrillField.Six(area, new Random(8), 22);
+        bool sixMoved = false;
+        for (int i = 0; i < six.Length; i++)
+            if (Math.Abs(sixNextSeed[i].x - six[i].x) > 1 || Math.Abs(sixNextSeed[i].y - six[i].y) > 1) sixMoved = true;
+        Check(sixMoved, "the next set is a different set - sixshot is not the same six flicks forever");
+
+        Check(DrillInfo.MinRadiusPx(DrillKind.Tracking) > DrillInfo.MinRadiusPx(DrillKind.Gridshot),
+            "the tracking target has a bigger floor than a click target: it is the thing being followed");
+        Check(DrillInfo.MinRadiusPx(DrillKind.Gridshot) == 0, "and a click drill still honours whatever radius was asked for");
 
         // FreeCells must be a selection, never a repeat
         var rng = new Random(7);
@@ -753,6 +778,21 @@ public static class SelfTests
         return p;
     }
 
+    /// <summary>
+    /// What the official GUI would refuse to write about this profile. A candidate that validates as
+    /// a profile alone can still be broken once it is the one a device points at, so the check goes
+    /// through the whole document - same gate the app uses before anything reaches the driver.
+    /// </summary>
+    static List<string> Problems(ProfileDto p)
+    {
+        var root = new RootDto
+        {
+            Profiles = { p },
+            Devices = { new DeviceDto { Name = "mouse", Id = "id-1", Profile = p.Name } },
+        };
+        return Json.Validate(root);
+    }
+
     static void CurveLabChecks()
     {
         // --- which parameter a sweep touches, per mode ---
@@ -792,6 +832,8 @@ public static class SelfTests
         Check(cands[1].KnobValue is > 0.0024 and < 0.0026, "a 0.5 multiplier halves the swept value");
         Check(cands[0].IsNoAccel && cands[0].Profile.X.Mode == "noaccel",
             "the control is a different mode, not a weak acceleration");
+        Check(cands.All(c => Problems(c.Profile).Count == 0),
+            "every candidate - including the no-accel control - is a document the driver would accept");
         Check(cands.All(c => c.BlindLabel == $"候选 {c.Index + 1}"),
             "every blind label is an index and nothing else - the value must not leak into the round banner");
         Check(cands.All(c => !c.BlindLabel.Contains(c.Secret)) && cands.All(c => c.Secret.Length > 0),
@@ -799,6 +841,71 @@ public static class SelfTests
         Check(baseProfile.X.Acceleration == 0.005, "building candidates does not mutate the live profile");
         Check(cands[2].Profile.Y.Mode == "classic" && Math.Abs(cands[2].Profile.Y.Acceleration - 0.005) < 1e-9,
             "both axes are copied, so a candidate cannot silently drop the vertical curve");
+
+        // --- the sweep has to move both curves, not just the horizontal one ---
+        // The first build only ever wrote X. On a whole-mode profile that is right, the driver never
+        // reads Y; on a per-axis profile it meant 35 rounds where the vertical curve never moved and
+        // the session measured half of what it claimed to compare.
+        var both = AccelCandidates.Build(baseProfile, new[] { 1.0, 1.5 }, includeNoAccel: false);
+        Check(Math.Abs(both[1].Profile.X.Acceleration - 0.0075) < 1e-9
+              && Math.Abs(both[1].Profile.Y.Acceleration - 0.0075) < 1e-9,
+            "a 1.5x sweep moves the vertical curve by 1.5x too, not only the horizontal one");
+
+        var xOnly = AccelCandidates.Build(baseProfile, new[] { 1.0, 1.5 }, includeNoAccel: false,
+                                          axis: AxisTarget.Horizontal);
+        Check(Math.Abs(xOnly[1].Profile.Y.Acceleration - 0.005) < 1e-9,
+            "asked for one axis only, the other one is left exactly as it was");
+
+        // --- the wrist family: one strength, four consequences ---
+        var wristBase = ProfileWith("classic", 0.06);
+        wristBase.Speed.Whole = false;
+        wristBase.X.InputOffset = 3.0;
+        wristBase.Y.InputOffset = 2.5;
+        wristBase.Y.Acceleration = 0.15;
+        var wrist = AccelCandidates.BuildWrist(wristBase, new[] { 1.0, 2.0 }, includeNoAccel: false);
+        var strong = wrist[1];
+        Check(Math.Abs(strong.Profile.X.InputOffset - 6.0) < 1e-9,
+            "wrist x2 pushes the horizontal threshold up: 3.0 -> 6.0, so small corrections stay 1:1");
+        Check(Math.Abs(strong.Profile.Y.InputOffset - 1.25) < 1e-9,
+            "and pulls the vertical threshold down: 2.5 -> 1.25, so a two-millimetre pull counts");
+        Check(Math.Abs(strong.Profile.X.Acceleration - 0.12) < 1e-9
+              && Math.Abs(strong.Profile.Y.Acceleration - 0.30) < 1e-9,
+            "both axes get stronger, so the far end of a big flick still arrives");
+        Check(wrist[0].IsBase && Math.Abs(wrist[0].Profile.X.InputOffset - 3.0) < 1e-9
+              && Math.Abs(wrist[0].Profile.Y.InputOffset - 2.5) < 1e-9,
+            "strength 1 is the player's own curve untouched, so 'yours was best' is reachable");
+        Check(!strong.Profile.Speed.Whole,
+            "the wrist family forces per-axis mode: in whole mode the driver never reads the vertical curve");
+        Check(wrist.All(c => Problems(c.Profile).Count == 0),
+            "every wrist candidate is still a profile the official GUI would write");
+
+        var weak = AccelCandidates.BuildWrist(wristBase, new[] { 0.5 }, includeNoAccel: false)[0];
+        Check(weak.Profile.X.InputOffset < 3.0 && weak.Profile.Y.InputOffset > 2.5,
+            "half strength goes the other way: horizontal accelerates earlier, vertical later");
+
+        // --- thresholds: where the multiplier leaves 1.0 ---
+        var offP = ProfileWith("classic", 0.06);
+        AccelCandidates.Set(offP, 7.0, AccelCandidates.Knob.Offset);
+        Check(Math.Abs(AccelCandidates.Get(offP, AccelCandidates.Knob.Offset) - 7.0) < 1e-12,
+            "the input-speed threshold round-trips through the same knob the wrist sweep turns");
+
+        var jumpP = ProfileWith("jump", 0.9);
+        AccelCandidates.Set(jumpP, 4.0, AccelCandidates.Knob.Offset);
+        Check(Math.Abs(jumpP.X.Cap.X - 4.0) < 1e-12, "jump keeps its threshold in Cap.x");
+        AccelCandidates.Set(jumpP, 1.4, AccelCandidates.Knob.Amount);
+        Check(Math.Abs(jumpP.X.Cap.Y - 1.4) < 1e-12,
+            "and its amount in Cap.y - the acceleration field is one the jump evaluator never reads");
+
+        Check(!AccelCandidates.HasThreshold(ProfileWith("synchronous").X),
+            "synchronous has no floor to move, so the wrist sweep leaves its threshold alone");
+
+        var capped = ProfileWith("classic", 0.06);
+        capped.X.CapMode = "input";
+        capped.X.Cap.X = 5.0;
+        AccelCandidates.Set(capped, 40.0, AccelCandidates.Knob.Offset);
+        Check(capped.X.InputOffset < 5.0,
+            "a threshold pushed past the input cap is stopped short of it instead of written as garbage");
+        Check(Problems(capped).Count == 0, "and the clamped profile still validates");
 
         // --- flick consistency ---
         var even = new FlickStats();
