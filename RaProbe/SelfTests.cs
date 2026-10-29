@@ -480,6 +480,34 @@ public static class SelfTests
                 $"the sidecar note is what the button shows: '{named?.Summary}'");
             Check(Presets.Delete("压枪 1.25", out _) && !File.Exists(named!.NoteFile),
                 "deleting a preset also removes its note file");
+
+            // renaming: the complaint was that changing a name only ever produced a second copy
+            Check(Presets.Save("旧手感", p, out _, "最初的曲线") != null, "a preset to rename");
+            string shaBefore = Presets.List().First(x => x.Name == "旧手感").Sha;
+
+            Check(Presets.Rename("旧手感", "手腕流 0.06", out string re) && re == "", "a rename succeeds");
+            var renamed = Presets.List();
+            Check(renamed.Count == 1, $"and it stays ONE preset, not two ({renamed.Count})");
+            Check(renamed[0].Name == "手腕流 0.06" && renamed[0].Sha == shaBefore,
+                "the name changed and the curve did not - so it is still the same curve, relabelled");
+            Check(renamed[0].Summary == "最初的曲线" && renamed[0].NoteFile.EndsWith("手腕流 0.06.txt"),
+                "its note travels with it instead of being orphaned under the old name");
+            Check(!File.Exists(Path.Combine(dir, "旧手感.json")), "the old file is gone, not left as a duplicate");
+
+            var loaded = Presets.TryLoad(renamed[0].File);
+            Check(loaded != null && Math.Abs(loaded.YxRatio - 1.25) < 1e-12 && loaded.Name == "default",
+                "the profile inside is untouched, including the name the driver resolves by");
+
+            Check(Presets.Save("另一条", new ProfileDto { Name = "default", YxRatio = 2 }, out _) != null, "a second preset to collide with");
+            Check(!Presets.Rename("手腕流 0.06", "另一条", out string clash) && clash.Contains("已经有"),
+                "renaming onto an existing name is refused, not silently merged");
+            Check(Presets.List().Count == 2, "and nothing was lost in the attempt");
+            Check(!Presets.Rename("手腕流 0.06", "///", out string empty) && empty.Contains("没留下"),
+                "a name with no usable characters is refused");
+            Check(!Presets.Rename("不存在的方案", "随便", out string missing) && missing.Contains("没有"),
+                "renaming a preset that is not there says so");
+            Check(Presets.Rename("手腕流 0.06", "手腕流 0.06 2", out _) && Presets.List().Count == 2,
+                "a rename to a free name still works after the failures");
         }
         finally { Presets.DirOverride = prior; try { Directory.Delete(dir, true); } catch { } }
     }

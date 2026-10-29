@@ -70,12 +70,22 @@
                             <TextBlock x:Name="SelectedName" Text="先从左侧选一份方案" Margin="0,6,0,12"
                                        TextWrapping="Wrap" Style="{StaticResource SubtleTextStyle}"/>
                             <Button x:Name="Overwrite" Content="用当前参数更新这份方案" Click="OnOverwrite" IsEnabled="False" Margin="0,0,0,8"/>
+                            <Button x:Name="Rename" Content="重命名这份方案" Click="OnRename" IsEnabled="False" Margin="0,0,0,8"
+                                    ToolTip="只改名字，不动曲线。改完还是同一份方案，不会多出一份副本。"/>
                             <Button x:Name="Delete" Content="删除选中方案" Click="OnDelete" IsEnabled="False"/>
                             <TextBlock x:Name="Notice" Margin="0,12,0,0" TextWrapping="Wrap" Style="{StaticResource SubtleTextStyle}"/>
                             <WrapPanel x:Name="ConfirmPanel" Visibility="Collapsed" Margin="0,8,0,0">
                                 <Button x:Name="Confirm" Content="确认" Click="OnConfirm" Margin="0,0,8,0"/>
                                 <Button Content="取消" Click="OnCancel"/>
                             </WrapPanel>
+                            <StackPanel x:Name="RenamePanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                <TextBlock Text="新名字（只改标签，曲线本身不动）" Style="{StaticResource SubtleTextStyle}" Margin="0,0,0,4"/>
+                                <TextBox x:Name="RenameName" Margin="0,0,0,8" KeyDown="OnRenameKeyDown"/>
+                                <WrapPanel>
+                                    <Button Content="确认改名" Click="OnRenameConfirm" Margin="0,0,8,0"/>
+                                    <Button Content="取消" Click="OnRenameCancel"/>
+                                </WrapPanel>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>

@@ -58,7 +58,7 @@
 
 ```powershell
 publish.cmd                     # 发布 + 用发布出来的二进制跑离线断言，不绿就别用这个构建
-app\RaProbe.exe --selftest      # 357 项离线断言
+app\RaProbe.exe --selftest      # 370 项离线断言
 ```
 
 每次 push / PR 会在 GitHub Actions 上跑同一套（`dotnet build -warnaserror` + 发布 RaProbe + `--selftest`），见 `.github/workflows/ci.yml`。只在 Windows 上跑：RaUI 是 WPF，RaCore 直接 p/invoke `CreateFileW` / `DeviceIoControl`，Linux 上没有可跑的东西。
@@ -77,6 +77,7 @@ app\RaUI.exe --calib-live 5                           # 真的开 5 秒转盘，
 app\RaUI.exe --dump-calib-report "$env:TEMP\r.png"     # 盲测报告（合成数据；--stage round 看轮次卡片，--stage nomove 看五轮都没打动的分支）
 app\RaUI.exe --calib-push-check                       # 临时改驱动曲线 → 回读 → 还原，并逐字节比对
 app\RaUI.exe --calib-apply-check   # 真按一次报告上的「应用」+「加入我的方案」：自动在 settings.json 副本上跑，结束时逐字节证明真文件没被改
+app\RaUI.exe --plans-rename-check    # 在方案页上真点一次「重命名」，并检查重复曲线不会全部显示"当前使用"
 app\RaUI.exe --dump-tray                               # 托盘提示与右键菜单
 app\RaUI.exe --autostart-check                         # 自启项往返：装→查→原样还原
 ```
@@ -139,6 +140,15 @@ settings-path.txt   可选：只写一行路径。程序猜不到官方 settings
 - **起点是"你用了半年的那条"。** 五轮结束不是直接采用结果，而是让结果和出发那条再打 10 轮；赢不下来就明确说"先别改"。
 
 几何、轮换和闸门都在 `RaCore/CalibLadder.cs`，不碰窗口也不碰驱动。自测里有一段把整个阶梯对着一个"虚构的真值"重放：从离真值 2.5 倍的起点出发，五轮之后落在真值的 5% 以内，且任一动作都不会让它离真值更远。
+
+## 「当前使用」和重命名
+
+一份方案的参数和驱动里正在跑的那组完全一样，就说它"当前使用"。但驱动只回报**参数内容**，不回报"这组是谁给它的"——所以同一个手感存过两次（改个名字保存一次就够），驱动给出的答案对两份完全相同。
+
+- 判定分两步：先用参数哈希缩小范围，再用"你最后一次点应用的是哪一份"定人（记在 `raui.ui.json` 的 `lastAppliedPlan`，改名会跟着走）。
+- 记不起来的时候不猜（比如刚升级到这一版）：这几行标「参数与现在这条一样」，顶部写「N 份方案参数相同，驱动分不出是哪一份」。应用其中任意一份之后，就只有那一份标「当前使用」。
+- **重命名是真的改名**（`Presets.Rename`）：复制方案文件和它的说明 `.txt`，成功后删掉旧文件。曲线本身和它的 sha 都不变，所以"是不是当前这条"的判定不受影响，也不会多出一份副本 —— 而"另存为新方案"以前是唯一的改名办法，这正是两份一模一样方案的来源。
+- 「原来的手感」也能改名（它只是个标签）。改名后它**不再是保留项**，可以被覆盖或删除，打开改名框时界面会先提示这一点。
 
 ## 三处 DPI 到底谁说了算
 

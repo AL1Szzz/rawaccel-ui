@@ -153,6 +153,50 @@ public static class Presets
         return SafeName(root) + " " + Guid.NewGuid().ToString("N")[..4];
     }
 
+    /// <summary>
+    /// Change a preset's label, leaving its contents - and therefore its sha and its standing as
+    /// "the curve in the driver right now" - exactly as they were.
+    ///
+    /// This exists because the only way to change a name used to be saving the current parameters
+    /// under a new one, which leaves two files holding the same curve and no way to tell which one
+    /// was meant. The file is copied and only then deleted: a rename that fails halfway must not
+    /// end with neither name on disk.
+    /// </summary>
+    public static bool Rename(string from, string to, out string error)
+    {
+        error = "";
+        var hit = List().FirstOrDefault(p => string.Equals(p.Name, from, StringComparison.OrdinalIgnoreCase));
+        if (hit == null) { error = "列表里没有这条曲线"; return false; }
+
+        string safe = SafeName(to);
+        if (safe.Length == 0) { error = "名字里没留下可用字符（中文、字母、数字都行）"; return false; }
+        // Windows file names are case-insensitive, so "ABC" -> "abc" is the same file: treat it as
+        // already done rather than as a collision with itself
+        if (string.Equals(safe, hit.Name, StringComparison.OrdinalIgnoreCase)) return true;
+        if (List().Any(p => string.Equals(p.Name, safe, StringComparison.OrdinalIgnoreCase)))
+        {
+            error = "已经有叫「" + safe + "」的方案了，换一个名字";
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(Dir);
+            string target = Path.Combine(Dir, safe + ".json");
+            File.Copy(hit.File, target, false);
+
+            // the sidecar note travels with it: a blind-test result whose description got left
+            // behind under the old name would be a rename that quietly lost its explanation
+            if (hit.NoteFile.Length > 0 && File.Exists(hit.NoteFile))
+                File.Copy(hit.NoteFile, Path.ChangeExtension(target, ".txt"), true);
+
+            File.Delete(hit.File);
+            if (hit.NoteFile.Length > 0 && File.Exists(hit.NoteFile)) File.Delete(hit.NoteFile);
+            return true;
+        }
+        catch (Exception e) { error = "改名失败：" + e.Message; return false; }
+    }
+
     public static bool Delete(string name, out string error)
     {
         error = "";

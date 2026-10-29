@@ -187,6 +187,18 @@ public partial class App : Application
             return;
         }
 
+        // --plans-rename-check: press 重命名 on a real plans page. The only way to change a name used
+        // to be saving the parameters again under a new one, which left two copies of the same curve;
+        // this drives the buttons instead of the file API, so a broken wiring cannot pass silently.
+        if (System.Array.Exists(e.Args, a => a == "--plans-rename-check"))
+        {
+            Headless = true;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            PlansRenameCheck();
+            Current?.Shutdown();
+            return;
+        }
+
         // --calib-apply-check: press the report's two buttons for real. They are the only controls
         // in the app that write to the player's own settings, and one of them used to throw
         // InvalidOperationException and take the process down with it. Rendered offscreen with an
@@ -397,6 +409,9 @@ public partial class App : Application
         int page = 0;
         var pi = System.Array.FindIndex(args, a => a == "--page");
         if (pi >= 0 && pi + 1 < args.Length) int.TryParse(args[pi + 1], out page);
+
+        // open the rename box (plans page) so the line it adds to that card can be rendered too
+        if (System.Array.Exists(args, a => a == "--open-rename")) RaUI.View.PlansPage.DebugOpenRename = true;
 
         // --height: a card below the fold can only be checked by rendering a taller window
         int dumpHeight = IntArg(args, "--height");
@@ -619,6 +634,101 @@ public partial class App : Application
             System.Console.WriteLine(restored && afterRestore.AsSpan().SequenceEqual(before)
                 ? $"{what}: restore ok, byte-for-byte the settings from before the check"
                 : $"{what}: RESTORE FAILED - " + (push.RestoreFailure ?? "bytes differ"));
+        }
+    }
+
+    /// <summary>
+    /// Click 重命名 on a plans page holding three presets, two of which are byte-identical. Both
+    /// complaints are checked here: that a rename leaves one preset rather than two, and that the
+    /// duplicate curves are not all announced as "当前使用".
+    /// </summary>
+    static void PlansRenameCheck()
+    {
+        var scratch = Path.Combine(Path.GetTempPath(), "raui-renamecheck-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(scratch);
+        var priorPresets = Presets.DirOverride;
+        var priorLast = AppState.Prefs.LastAppliedPlan;
+        Presets.DirOverride = Path.Combine(scratch, "presets");
+        try
+        {
+            var live = App.State.SelectedProfile?.Clone() ?? new ProfileDto { Name = "default" };
+            Presets.Save("基线", live.Clone(), out _);
+            Presets.Save("盲测 10-29 2333", live.Clone(), out _);       // same numbers on purpose
+            var hot = live.Clone();
+            hot.YxRatio = 1.25;
+            Presets.Save("压枪 1.25", hot, out _);
+
+            var page = new RaUI.View.PlansPage();
+            var host = new Window { Content = page, Width = 900, Height = 620, ShowInTaskbar = false };
+            host.Show();
+            page.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+
+            List<RaUI.View.PlansPage.PlanRow> Rows() =>
+                page.PlanList.Items.Cast<RaUI.View.PlansPage.PlanRow>().ToList();
+            void Pick(string name)
+            {
+                page.PlanList.SelectedItem = Rows().First(r => r.Plan.Name == name);
+                page.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+            void Press(string method) =>
+                typeof(RaUI.View.PlansPage)
+                    .GetMethod(method, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?.Invoke(page, new object?[] { null, null });
+
+            System.Console.WriteLine($"[ui] {Rows().Count} rows: " +
+                string.Join(" | ", Rows().Select(r => r.Label)));
+
+            // the duplicate-curve complaint: at most one row may claim to be the live one
+            int claiming = Rows().Count(r => r.Label.Contains("当前使用"));
+            int same = Rows().Count(r => r.Label.Contains("参数与现在这条一样"));
+            System.Console.WriteLine(claiming <= 1 && same <= 3
+                ? $"[ui] ok: {claiming} row says 当前使用, {same} rows say 参数与现在这条一样"
+                : $"[ui] FAILED: {claiming} rows claim 当前使用");
+
+            // once a plan has actually been applied, exactly that one may be called 当前使用
+            AppState.Prefs.LastAppliedPlan = "盲测 10-29 2333";
+            Press("OnRefresh");
+            var claims = Rows().Where(r => r.Label.Contains("当前使用")).ToList();
+            System.Console.WriteLine(claims.Count == 1 && claims[0].Plan.Name == "盲测 10-29 2333"
+                ? "[ui] ok: after applying, exactly one row says 当前使用 — " + claims[0].Label
+                : $"[ui] FAILED: {claims.Count} rows claim 当前使用 after applying one");
+
+            // the baseline must be renameable - it is the one the user could not touch
+            Pick("基线");
+            System.Console.WriteLine(page.Rename.IsEnabled
+                ? "[ui] ok: 原来的手感 can be renamed (button enabled)"
+                : "[ui] FAILED: 重命名 is disabled for 原来的手感");
+
+            Press("OnRename");
+            page.RenameName.Text = "旧手感";
+            Press("OnRenameConfirm");
+            page.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+
+            var after = Presets.List();
+            bool renamed = after.Any(p => p.Name == "旧手感") && after.Count == 3
+                           && !after.Any(p => p.Name == "基线");
+            System.Console.WriteLine(renamed
+                ? $"[ui] ok: renamed in place, still {after.Count} presets: " +
+                  string.Join(" | ", after.Select(p => p.Name))
+                : "[ui] FAILED: rename left " + after.Count + " presets: " +
+                  string.Join(" | ", after.Select(p => p.Name)));
+            System.Console.WriteLine(page.PlanList.SelectedItem is RaUI.View.PlansPage.PlanRow sel &&
+                                     sel.Plan.Name == "旧手感"
+                ? "[ui] ok: the renamed plan stays selected"
+                : "[ui] FAILED: selection did not follow the rename");
+
+            host.Close();
+        }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine("FAILED: " + ex.GetType().Name + ": " + ex.Message);
+            CrashLog(ex, "plans-rename-check");
+        }
+        finally
+        {
+            Presets.DirOverride = priorPresets;
+            AppState.Prefs.LastAppliedPlan = priorLast;
+            try { Directory.Delete(scratch, true); } catch { }
         }
     }
 

@@ -44,6 +44,13 @@ public sealed class UiPrefs
     /// <summary>1 = five narrowing stages (default), 0 = one sweep.</summary>
     [JsonPropertyName("calibMode")] public int CalibMode { get; set; } = 1;
 
+    /// <summary>
+    /// The name of the preset last put into the driver. Several presets can hold byte-identical
+    /// parameters, and the driver has no way to tell them apart - it only ever reports the profile
+    /// contents - so without this the plan list would light up every one of them as "当前使用".
+    /// </summary>
+    [JsonPropertyName("lastAppliedPlan")] public string LastAppliedPlan { get; set; } = "";
+
     /// <summary>Crosshair drawn at the pointer hotspot during the test (physical pixels).</summary>
     [JsonPropertyName("crossArm")] public double CrossArm { get; set; } = 9;
     [JsonPropertyName("crossGap")] public double CrossGap { get; set; } = 3;
