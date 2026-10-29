@@ -4,6 +4,8 @@
 >
 > 它**不是**外挂：不读游戏内存、不注入、不写宏、不改游戏文件。驱动是上游官方签名的 `rawaccel.sys`，本项目只是它的配置客户端。
 
+[![CI](https://github.com/AL1Szzz/rawaccel-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/AL1Szzz/rawaccel-ui/actions/workflows/ci.yml)
+
 中文界面 · 英文代码注释 · Windows · .NET 8 (WPF)
 
 ---
@@ -58,6 +60,8 @@
 publish.cmd                     # 发布 + 用发布出来的二进制跑离线断言，不绿就别用这个构建
 app\RaProbe.exe --selftest      # 113 项离线断言
 ```
+
+每次 push / PR 会在 GitHub Actions 上跑同一套（`dotnet build -warnaserror` + 发布 RaProbe + `--selftest`），见 `.github/workflows/ci.yml`。只在 Windows 上跑：RaUI 是 WPF，RaCore 直接 p/invoke `CreateFileW` / `DeviceIoControl`，Linux 上没有可跑的东西。
 
 `--selftest` 全程不碰驱动、不改分辨率、不注入鼠标输入，所以可以在你打游戏时跑。它守的都是真出过问题的地方：结构体尺寸与驱动头文件一致、blob 往返逐字节相同、非 ASCII 设备名能过线、方案名的哈希必须等于驱动回报的哈希、成绩历史里一行坏数据不能拖垮整张表、阈值必须落在曲线自己的低速基线上（带垂直倍率时，参照 1.0 会误报"0 就开始加速"）、上面每条驱动侧范围检查都真的拦得住、以及**这台机器正在用的 settings.json 必须仍然通过校验**（不然以后每次收紧都只是把你的曲线挡在门外）。
 

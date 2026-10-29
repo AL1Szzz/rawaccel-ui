@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaCore", "RaCore\RaCore.csproj", "{0460B2FC-CBEE-4C93-B094-2554EE0F8194}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaProbe", "RaProbe\RaProbe.csproj", "{C9CB1AF5-9E50-4EA4-AE06-BCBB41CBDCCF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaUI", "RaUI\RaUI.csproj", "{6E1C2139-1EAB-4EE3-92F7-E78EDED5D49F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0460B2FC-CBEE-4C93-B094-2554EE0F8194}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0460B2FC-CBEE-4C93-B094-2554EE0F8194}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0460B2FC-CBEE-4C93-B094-2554EE0F8194}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0460B2FC-CBEE-4C93-B094-2554EE0F8194}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9CB1AF5-9E50-4EA4-AE06-BCBB41CBDCCF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9CB1AF5-9E50-4EA4-AE06-BCBB41CBDCCF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9CB1AF5-9E50-4EA4-AE06-BCBB41CBDCCF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9CB1AF5-9E50-4EA4-AE06-BCBB41CBDCCF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6E1C2139-1EAB-4EE3-92F7-E78EDED5D49F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6E1C2139-1EAB-4EE3-92F7-E78EDED5D49F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6E1C2139-1EAB-4EE3-92F7-E78EDED5D49F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6E1C2139-1EAB-4EE3-92F7-E78EDED5D49F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

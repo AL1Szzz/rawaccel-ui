@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Windows only: RaUI is WPF and RaCore p/invokes CreateFileW/DeviceIoControl, so there is
+# nothing meaningful to run on Linux.
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore RawAccelUI.sln
+
+      # -warnaserror is on purpose: the gates below only mean something if the build that
+      # produced them was clean. Locally all three projects report 0 warnings.
+      - name: Build
+        run: dotnet build RawAccelUI.sln -c Release --no-restore -warnaserror
+
+      # RaProbe only: RaUI's single-file publish needs compression and takes minutes, and
+      # every assertion worth gating lives in RaCore/RaProbe anyway.
+      - name: Publish RaProbe
+        run: dotnet publish RaProbe/RaProbe.csproj -c Release --no-build -o app-ci
+
+      # The same gate publish.cmd runs. Fully offline: no driver, no display mode changes,
+      # no injected mouse input, so it is safe on a hosted runner. It exits non-zero on
+      # failure - do not pipe it, that would leave the pipe's exit code behind.
+      - name: Offline self-tests
+        run: app-ci\RaProbe.exe --selftest

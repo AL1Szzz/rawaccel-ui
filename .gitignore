@@ -2,5 +2,6 @@ bin/
 obj/
 release*/
 app/
+app-ci/
 logs/
 *.user
