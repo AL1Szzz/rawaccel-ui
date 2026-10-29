@@ -50,7 +50,10 @@ public static class SelfTests
         Console.WriteLine("\n== H. CurveAnalysis: where the curve leaves its own baseline ==");
         Section("curve", CurveChecks);
 
-        Console.WriteLine("\n== I. SettingsFile: the official path is found, never assumed ==");
+        Console.WriteLine("\n== I. CurveSampler: the points the curve page actually plots ==");
+        Section("sampler", SamplerChecks);
+
+        Console.WriteLine("\n== J. SettingsFile: the official path is found, never assumed ==");
         Section("settings", SettingsChecks);
 
         Console.WriteLine();
@@ -497,6 +500,67 @@ public static class SelfTests
     }
 
     // ---------- I ----------
+
+    static void SamplerChecks()
+    {
+        var prof = Convert4.ToStruct(BaseProfile());
+        var pts = CurveSampler.Sample(prof, chartDpi: 0, normalized: false);
+
+        Check(pts.Length == CurveSampler.SampleCount,
+            $"{CurveSampler.SampleCount} points, no more and no fewer ({pts.Length})");
+        Check(Math.Abs(pts[^1].Axis - 30) < 1e-9,
+            $"without a chart DPI the axis ends at 30 counts/ms ({pts[^1].Axis:0.###})");
+        Check(Math.Abs(CurveSampler.Sample(prof, 800, false)[^1].Axis - 40) < 1e-9,
+            "with a chart DPI it ends at 40 in/s");
+
+        bool rising = true;
+        for (int i = 1; i < pts.Length; i++) if (pts[i].Axis <= pts[i - 1].Axis) rising = false;
+        Check(rising, "the axis is strictly increasing, so the polyline never doubles back");
+        Check(pts.All(s => double.IsFinite(s.Sensitivity) && double.IsFinite(s.Gain)),
+            "no NaN or Infinity reaches the plot: one bad field would blank the whole chart");
+
+        // Below the 3 counts/ms offset the multiplier is exactly 1. CurveAnalysis claims the same
+        // thing about the threshold; this checks it from the points that actually get drawn.
+        Check(Math.Abs(pts[0].Sensitivity - 1) < 1e-6,
+            $"the first point sits below the offset, so it reads 1.00 ({pts[0].Sensitivity:0.000000})");
+        Check(Math.Abs(pts[0].Gain - 1) < 1e-3,
+            $"and so does the slope there ({pts[0].Gain:0.0000})");
+
+        // The cap is 1.97 on the GAIN, not on the sensitivity: sensitivity is out/in, the average
+        // multiplier over the whole sweep, while gain is d(out)/d(in), the marginal one at that
+        // speed. An always-rising curve is steeper at the tip than it is on average, so the two
+        // series must differ - if they came out equal, the gain view would be plotting the same
+        // numbers twice. (Measured: 1.742 vs 1.97.)
+        double maxGain = pts.Max(s => s.Gain);
+        double maxSens = pts.Max(s => s.Sensitivity);
+        Check(Math.Abs(maxGain - 1.97) < 0.01, $"the output cap holds the gain at 1.97 ({maxGain:0.000})");
+        Check(maxGain <= 1.97 + 1e-9, "and nothing plots above it");
+        Check(maxSens > 1.1 && maxSens < maxGain - 1e-6,
+            $"the sensitivity series stays under the gain series ({maxSens:0.000} vs {maxGain:0.000})");
+
+        var flat = BaseProfile();
+        flat.X.Acceleration = 0; flat.X.Cap.X = 0; flat.X.Cap.Y = 0;
+        flat.Y.Acceleration = 0; flat.Y.Cap.X = 0; flat.Y.Cap.Y = 0;
+        var flatPts = CurveSampler.Sample(Convert4.ToStruct(flat), 0, false);
+        Check(flatPts.All(s => Math.Abs(s.Sensitivity - 1) < 1e-9),
+            "a profile with no acceleration plots a flat 1.00 everywhere");
+
+        // The display axis is the only place DPI enters, and getting it backwards shifts every
+        // marker on the chart. 800 dpi with normalization off: 20 in/s is 16 counts/ms.
+        Check(Math.Abs(CurveSampler.AxisToInternal(20, 800, false) - 16) < 1e-9, "20 in/s at 800 dpi is 16 counts/ms");
+        Check(Math.Abs(CurveSampler.InternalToAxis(16, 800, false) - 20) < 1e-9, "and back again");
+        Check(Math.Abs(CurveSampler.AxisToInternal(20, 800, true) - 20) < 1e-9,
+            "with DPI normalization the driver already divided, so the axis is the internal speed");
+
+        // The gain column costs two extra trips through the modifier per point, so the
+        // sensitivity view skips it. Skipped must mean zero, not "whatever was in the array".
+        var noGain = CurveSampler.Sample(prof, 0, false, withGain: false);
+        Check(noGain.All(s => s.Gain == 0), "the sensitivity view does not pay for the gain column");
+        Check(noGain.Select(s => s.Sensitivity).SequenceEqual(pts.Select(s => s.Sensitivity)),
+            "and skipping it leaves the sensitivity values untouched");
+    }
+
+    // ---------- J ----------
 
     static void SettingsChecks()
     {

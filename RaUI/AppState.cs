@@ -741,69 +741,32 @@ public sealed class AppState : INotifyPropertyChanged
 
     // ---------- curve math (identical to the driver's own headers) ----------
 
-    /// <summary>
-    /// Display axis -> the speed the driver actually compares against.
-    /// With DPI normalization off, speed_internal == counts/ms and physical in/s = counts/ms*1000/DPI.
-    /// With normalization on, speed_internal is already the 1000-dpi-equivalent in/s.
-    /// </summary>
-    double AxisToInternal(double axis)
-    {
-        bool normalized = Doc.DefaultDeviceConfig.Dpi > 0;
-        if (ChartDpi <= 0) return axis;                       // axis is counts/ms already
-        return normalized ? axis : axis * ChartDpi / 1000.0;  // axis is in/s
-    }
-
-    double InternalToAxis(double v)
-    {
-        bool normalized = Doc.DefaultDeviceConfig.Dpi > 0;
-        if (ChartDpi <= 0) return v;
-        return normalized ? v : v * 1000.0 / ChartDpi;
-    }
-
     public void RebuildCurves()
     {
         var p = selected;
         if (p == null) { Series = new(); Markers = new(); Zones = new(); Raise(nameof(Series)); return; }
 
-        double time = 1.0;   // 1 ms: feeding speed*time gives counts/ms directly
-        var ms = new ModifierSettings(Convert4.ToStruct(p));
-        var mod = new Modifier(ms);
+        bool normalized = Doc.DefaultDeviceConfig.Dpi > 0;
+        bool wantGain = CurveKind == CurveKind.Gain;
 
-        double OutSpeedAtInternal(double v, bool horizontal)
-        {
-            var sp = new SpeedProcessor();
-            sp.Init(ms.prof.speed_processor_args);
-            var input = horizontal ? new vec2d { x = v * time, y = 0 } : new vec2d { x = 0, y = v * time };
-            var o = mod.Modify(input, sp, 1, time);   // dpiFactor = 1: axis conversion handled above
-            return M.Magnitude(o) / time;
-        }
-
-        double maxAxis = ChartDpi > 0 ? 40 : 30;   // in/s or counts/ms
-        int n = 240;
-
-        var sens = new List<CurvePoint>();
-        var gain = new List<CurvePoint>();
-
-        for (int i = 1; i <= n; i++)
-        {
-            double axis = maxAxis * i / n;
-            double v = AxisToInternal(axis);
-            double o = OutSpeedAtInternal(v, true);
-            double h = v * 1e-3 + 1e-6;
-            double g = (OutSpeedAtInternal(v + h, true) - OutSpeedAtInternal(Math.Max(v - h, 0), true)) / (2 * h);
-
-            sens.Add(new CurvePoint(axis, o / Math.Max(v, 1e-9)));
-            gain.Add(new CurvePoint(axis, g));
-        }
+        // Sampling lives in RaCore next to CurveAnalysis: it is the driver's own math, and it was
+        // the only consumer of it that the self tests could not reach. Only the series being shown
+        // is computed - the gain column costs two extra trips through the modifier per point.
+        var samples = CurveSampler.Sample(Convert4.ToStruct(p), ChartDpi, normalized, withGain: wantGain);
+        double maxAxis = CurveSampler.MaxAxis(ChartDpi);
 
         string unit = ChartDpi > 0 ? $"in/s @ {ChartDpi:0} DPI" : "counts/ms";
         XAxisLabel = $"手速 ({unit})";
-        YAxisLabel = CurveKind == CurveKind.Gain ? "增益 (d输出/d输入)" : "灵敏度 (输出/输入)";
+        YAxisLabel = wantGain ? "增益 (d输出/d输入)" : "灵敏度 (输出/输入)";
+
+        var points = new List<CurvePoint>(samples.Length);
+        foreach (var s in samples) points.Add(new CurvePoint(s.Axis, wantGain ? s.Gain : s.Sensitivity));
 
         Brush accent = Brush("AccentBrush");
-        Series = CurveKind == CurveKind.Gain
-            ? new List<CurveSeries> { new() { Name = "增益", Brush = accent, Points = gain } }
-            : new List<CurveSeries> { new() { Name = "灵敏度", Brush = accent, Points = sens } };
+        Series = new List<CurveSeries>
+        {
+            new() { Name = wantGain ? "增益" : "灵敏度", Brush = accent, Points = points },
+        };
 
         // Labelled markers. An unlabelled dashed line is just noise on the chart, which is what
         // the four yellow lines used to be. X and Y get different colours so 起/顶 can be traced
@@ -816,7 +779,7 @@ public sealed class AppState : INotifyPropertyChanged
         void AddMark(double internalV, string label, Brush col)
         {
             if (internalV <= 0 || double.IsInfinity(internalV)) return;
-            double axis = InternalToAxis(internalV);
+            double axis = CurveSampler.InternalToAxis(internalV, ChartDpi, normalized);
             if (axis is > 0 and < 400) Markers.Add(new ChartMarker(axis, label, col));
         }
         AddMark(axX.threshold, "X起", xCol);
@@ -826,8 +789,8 @@ public sealed class AppState : INotifyPropertyChanged
 
         // The plotted curve is the X curve, so the bands are X bands: below the X threshold the
         // multiplier is exactly 1.0 however hard he moves, above the X cap it stops rising.
-        double zLo = axX.threshold > 0 && !double.IsInfinity(axX.threshold) ? InternalToAxis(axX.threshold) : double.NaN;
-        double zHi = axX.capSpeed > 0 && !double.IsInfinity(axX.capSpeed) ? InternalToAxis(axX.capSpeed) : double.NaN;
+        double zLo = axX.threshold > 0 && !double.IsInfinity(axX.threshold) ? CurveSampler.InternalToAxis(axX.threshold, ChartDpi, normalized) : double.NaN;
+        double zHi = axX.capSpeed > 0 && !double.IsInfinity(axX.capSpeed) ? CurveSampler.InternalToAxis(axX.capSpeed, ChartDpi, normalized) : double.NaN;
 
         // The bands come from the curve alone: below the X threshold the multiplier is exactly
         // 1.0 however fast the hand moves, above the X cap it stops rising.
