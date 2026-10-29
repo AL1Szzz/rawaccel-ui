@@ -72,7 +72,7 @@ app\RaUI.exe --autostart-check                         # 自启项往返：装�
 
 ## 快速开始
 
-前置：Windows 10/11、[.NET 8 SDK](https://dotnet.microsoft.com/download)、已安装官方 [Raw Accel 1.7.x](https://github.com/rawaccel/rawaccel) 驱动（本项目不安装驱动）。
+前置：Windows 10/11、[.NET 8 SDK](https://dotnet.microsoft.com/download)、已安装官方 [Raw Accel 1.7.x](https://github.com/RawAccelOfficial/rawaccel) 驱动（本项目不安装驱动）。
 
 ```powershell
 git clone <本仓库地址> RawAccelUI
@@ -119,8 +119,10 @@ settings-path.txt   可选：只写一行路径。程序猜不到官方 settings
 
 ## 许可
 
-暂未添加 LICENSE 文件（默认保留所有权利）。曲线数学与驱动协议部分来自上游 [rawaccel](https://github.com/rawaccel/rawaccel)，遵循其原始许可。
+本项目采用 **MIT**（见 [`LICENSE`](LICENSE)）。
+
+曲线数学、驱动协议结构体与参数范围检查移植自上游 [rawaccel](https://github.com/RawAccelOfficial/rawaccel)（同为 MIT）。上游的版权声明与许可声明已按要求保留在 `LICENSE` 末尾，不做删改。
 
 ## 致谢
 
-- [rawaccel](https://github.com/rawaccel/rawaccel) — 驱动与曲线定义
+- [rawaccel](https://github.com/RawAccelOfficial/rawaccel) — 驱动与曲线定义（MIT）
