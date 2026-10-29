@@ -68,6 +68,9 @@ public static class SelfTests
         Console.WriteLine("\n== N. Session archive: a result that survives the window ==");
         Section("archive", ArchiveChecks);
 
+        Console.WriteLine("\n== O. Sensitivity: output DPI vs the DPI on the mouse ==");
+        Section("dpi", DpiChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -1109,6 +1112,37 @@ public static class SelfTests
             Check(DrillInfo.DefaultAlive(k) >= 1, $"{k} keeps at least one target alive");
         }
         Check(Enum.GetValues<DrillKind>().Length == 9, "all nine drills are reachable from the picker");
+    }
+
+    // ---------- O ----------
+
+    /// <summary>
+    /// The relationship nobody can guess from the UI: the driver's base multiplier is
+    /// output_dpi / device_dpi, so "Output DPI: 1000" means a different speed depending on whether
+    /// the device DPI is filled in. These numbers come from upstream (modifier in
+    /// common/rawaccel.hpp: output/1000 × 1000/input, and 1000/input is skipped when input is 0).
+    /// </summary>
+    static void DpiChecks()
+    {
+        Check(Math.Abs(Sensitivity.BaseRatio(1000, 0) - 1.0) < 1e-12,
+            "normalisation off: output 1000 is the 1:1 reference, so nothing is scaled");
+        Check(Math.Abs(Sensitivity.BaseRatio(1000, 600) - 1000.0 / 600) < 1e-12,
+            "with the real DPI filled in, the same output 1000 becomes 1.67x - a 600 DPI mouse behaving like 1000");
+        Check(Math.Abs(Sensitivity.BaseRatio(600, 600) - 1.0) < 1e-12,
+            "output = device DPI is the only combination that is truly 1:1");
+        Check(Sensitivity.IsUnity(600, 600) && !Sensitivity.IsUnity(1000, 600),
+            "IsUnity agrees, so the readout can say 'no extra scaling' without doing the math itself");
+
+        Check(Math.Abs(Sensitivity.EffectiveDpi(1000, 600) - 1000) < 1e-12,
+            "the effective DPI at low speed is the output DPI when the device DPI is known");
+        Check(Sensitivity.EffectiveDpi(1000, 0) == 0,
+            "with normalisation off no physical DPI can be derived - reported as unknown, not as 1000");
+
+        // the four combinations a player can actually land on
+        foreach (var (output, device, expect) in new[] { (1000.0, 0.0, 1.0), (1000.0, 600.0, 1000.0 / 600),
+                                                         (600.0, 600.0, 1.0), (800.0, 1600.0, 0.5) })
+            Check(Math.Abs(Sensitivity.BaseRatio(output, device) - expect) < 1e-12,
+                $"output {output:0} ÷ device {(device > 0 ? device.ToString("0") : "未填")} = {expect:0.00}x");
     }
 
     // ---------- N ----------

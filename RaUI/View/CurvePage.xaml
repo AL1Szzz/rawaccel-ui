@@ -12,7 +12,7 @@
         <StackPanel Grid.Row="0" Margin="4,6,4,10">
             <TextBlock Text="曲线与参数" Style="{StaticResource TitleTextStyle}"/>
             <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,4,0,0"
-                       Text="手动调整鼠标响应，修改后点击应用设置。"/>
+                       Text="左边是这条曲线长什么样，右边是参数。每个参数名悬停都有解释；只显示当前模式真正会用到的那些，其余的收在「高级」里。"/>
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -36,12 +36,16 @@
                         <RadioButton x:Name="RbGain" Content="增益" Margin="0,0,14,6"
                                      VerticalAlignment="Center" Checked="OnKind"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,14,6">
-                            <TextBlock Text="图表 DPI" VerticalAlignment="Center" Foreground="{StaticResource TextTertiaryBrush}"/>
-                            <TextBox x:Name="TxtChartDpi" Width="64" Margin="8,0,0,0" LostFocus="OnChartScale"/>
+                            <TextBlock Text="横轴 DPI" VerticalAlignment="Center" Foreground="{StaticResource TextTertiaryBrush}"
+                                       ToolTip="只决定这张图的横轴怎么标：填成你鼠标的真实 DPI，图上的 in/s 才和手速对得上。它不影响鼠标本身，右边「输出 DPI」才影响。"/>
+                            <TextBox x:Name="TxtChartDpi" Width="64" Margin="8,0,0,0" LostFocus="OnChartScale"
+                                     ToolTip="只影响图表刻度和 cm/s 换算，不写进驱动。"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                            <TextBlock Text="轮询率" VerticalAlignment="Center" Foreground="{StaticResource TextTertiaryBrush}"/>
-                            <TextBox x:Name="TxtChartPoll" Width="76" Margin="8,0,0,0" LostFocus="OnChartScale"/>
+                            <TextBlock Text="轮询率" VerticalAlignment="Center" Foreground="{StaticResource TextTertiaryBrush}"
+                                       ToolTip="只用来把「每包位移」算给你看（比如 600 计数/秒 ÷ 1000Hz = 每包 0.6 个计数），不影响鼠标。"/>
+                            <TextBox x:Name="TxtChartPoll" Width="76" Margin="8,0,0,0" LostFocus="OnChartScale"
+                                     ToolTip="只影响图表和读数，不写进驱动。"/>
                         </StackPanel>
                     </WrapPanel>
 

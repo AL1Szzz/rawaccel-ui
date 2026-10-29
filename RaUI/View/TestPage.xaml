@@ -287,8 +287,10 @@
                                                ToolTip="成绩里记下这只鼠标当前生效的方案；接了不止一只鼠标时才需要区分。"/>
                                     <ComboBox x:Name="CmbDevice" Grid.Row="2" Grid.Column="1" Height="28" Margin="6,3,0,3"/>
 
-                                    <TextBlock Grid.Row="3" Text="鼠标 DPI" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="TxtDpi" Grid.Row="3" Grid.Column="1" Text="600" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                                    <TextBlock Grid.Row="3" Text="鼠标真实 DPI" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                               ToolTip="只用来把成绩换算成 cm/s、°/s 和 cm/360。它不改鼠标手感 —— 手感由曲线页的「输出 DPI ÷ 设备 DPI」决定。"/>
+                                    <TextBox x:Name="TxtDpi" Grid.Row="3" Grid.Column="1" Text="600" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"
+                                             ToolTip="鼠标硬件/驱动里设的 DPI。填错只影响这里的物理量换算，不影响鼠标。"/>
                                 </Grid>
                             </Expander>
                         </StackPanel>

@@ -54,8 +54,9 @@ public partial class DevicePage : UserControl
 
         sp.Children.Add(Check("禁用所有设备的加速", () => cfg.Disable, v => cfg.Disable = v,
             "true = 驱动仍然加载但不动任何输入"));
-        sp.Children.Add(Text("DPI 归一化（0=关）", () => cfg.Dpi.ToString(), s => cfg.Dpi = ParseInt(s),
-            "填鼠标真实 DPI；驱动会把输入换算到 1000 DPI 基准"));
+        sp.Children.Add(Text("鼠标真实 DPI", () => cfg.Dpi.ToString(), s => cfg.Dpi = ParseInt(s),
+            "鼠标在驱动/硬件里设的那个 DPI（不是传感器标称值）。填对了，曲线的阈值单位才是真实的物理速度（in/s），换鼠标才不会换手感。\n" +
+            "注意它不会改变光标速度 —— 实际速度看曲线页的「输出 DPI ÷ 这个数」。0 = 关掉归一化，此时曲线横轴退回 counts/ms。"));
         sp.Children.Add(Text("轮询率 Hz（0=自动）", () => cfg.PollingRate.ToString(), s => cfg.PollingRate = ParseInt(s),
             "只有在开启加速时出现指针卡顿才需要固定它"));
         sp.Children.Add(Check("按轮询率使用固定时间间隔", () => cfg.PollTimeLock, v => cfg.PollTimeLock = v,
@@ -98,8 +99,9 @@ public partial class DevicePage : UserControl
 
         if (entry is not null)
         {
-            sp.Children.Add(Text("DPI 归一化（0=关）", () => entry.Config.Dpi.ToString(), s => entry.Config.Dpi = ParseInt(s),
-                "填真实 DPI 后，加速阈值不再随鼠标分辨率变化"));
+            sp.Children.Add(Text("鼠标真实 DPI", () => entry.Config.Dpi.ToString(), s => entry.Config.Dpi = ParseInt(s),
+                "这只鼠标实际设的 DPI。填对它，加速阈值才按物理速度对齐，换鼠标不用重调曲线。\n" +
+                "和曲线页的「输出 DPI」一起决定基础倍率：输出 ÷ 这个数。0 = 不归一化（单位退回 counts/ms）。"));
             sp.Children.Add(Text("轮询率 Hz（0=自动）", () => entry.Config.PollingRate.ToString(), s => entry.Config.PollingRate = ParseInt(s), null));
             sp.Children.Add(Check("禁用这只设备", () => entry.Config.Disable, v => entry.Config.Disable = v,
                 "键盘上的指点设备 / 触控板通常应该禁用"));

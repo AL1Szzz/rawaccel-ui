@@ -61,6 +61,13 @@ public partial class App : Application
         {
             CrashLog(a.Exception, "UI");
             a.Handled = true;
+            // Offscreen render runs have nobody to show a dialog to and no window to own it, and a
+            // dialog there turns a headless check into a box nobody expected on screen.
+            if (Headless || MainWindow == null)
+            {
+                System.Console.WriteLine("unhandled: " + a.Exception.Message);
+                return;
+            }
             try
             {
                 MessageBox.Show(
@@ -114,6 +121,19 @@ public partial class App : Application
             Headless = true;
             DumpDrill(drillIdx + 1 < e.Args.Length ? e.Args[drillIdx + 1] : @"C:\temp\drill.png",
                       IntArg(e.Args, "--kind"));
+            Shutdown();
+            return;
+        }
+
+        // --dump-tooltip: the parameter explanations are only readable if the tool tip has its own
+        // colours. They were light-on-light for a while - the system default surface under inherited
+        // white text - and nothing else in the app renders a tool tip, so a plain render check is
+        // the only way to see the one place the documentation lives.
+        int tipIdx = System.Array.FindIndex(e.Args, a => a == "--dump-tooltip");
+        if (tipIdx >= 0)
+        {
+            Headless = true;
+            DumpTooltip(tipIdx + 1 < e.Args.Length ? e.Args[tipIdx + 1] : @"C:\temp\tip.png");
             Shutdown();
             return;
         }
@@ -626,6 +646,47 @@ public partial class App : Application
         CalibArchive.DirOverride = null;
         try { Directory.Delete(scratch, true); } catch { }
         Current?.Shutdown();
+    }
+
+    /// <summary>
+    /// Render one tool tip on its own, so its colours can be checked by eye.
+    ///
+    /// A ToolTip cannot be added to a panel - WPF forbids it having a parent, because it lives in a
+    /// Popup - so it is measured and rendered standalone instead. That also means this check renders
+    /// the real template rather than a hand-painted copy of it: if the style is wrong, this shows it.
+    /// </summary>
+    static void DumpTooltip(string outPng)
+    {
+        var tip = new System.Windows.Controls.ToolTip
+        {
+            Content = "输出基准 DPI，它和「鼠标真实 DPI」一起决定基础倍率：" +
+                      "倍率 = 输出 DPI ÷ 鼠标真实 DPI（设备页那个；没填则按 1000 算）。" +
+                      "所以同样填 1000：设备 DPI 空着是 1.00×，填 600 就变成 1.67× —— 等于把 600 的鼠标当 1000 用。",
+        };
+
+        tip.Measure(new Size(440, double.PositiveInfinity));
+        tip.Arrange(new Rect(new Point(0, 0), tip.DesiredSize));
+        tip.UpdateLayout();
+
+        int pw = Math.Max(1, (int)Math.Ceiling(tip.ActualWidth));
+        int ph = Math.Max(1, (int)Math.Ceiling(tip.ActualHeight));
+        var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
+            pw, ph, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+
+        // dark backdrop, so a wrong surface colour is obvious rather than blending in
+        var bg = new System.Windows.Media.DrawingVisual();
+        using (var dc = bg.RenderOpen())
+            dc.DrawRectangle(new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x1E, 0x1E, 0x1E)), null, new Rect(0, 0, pw, ph));
+        rtb.Render(bg);
+        rtb.Render(tip);
+
+        var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
+        var dir = Path.GetDirectoryName(outPng);
+        if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        using (var fs = File.Create(outPng)) enc.Save(fs);
+        System.Console.WriteLine($"dumped {outPng} ({pw}x{ph}, tooltip)");
     }
 
     /// <summary>Render the blind-comparison report with invented rounds and save it.</summary>
