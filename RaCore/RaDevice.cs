@@ -46,12 +46,20 @@ public static unsafe class RaDevice
     public const uint MAX_MODIFIERS = 256;
     public const uint MAX_DEVICES = 1024;
 
+    /// <summary>
+    /// Present or absent. Throws on anything in between: Open() propagates Win32 errors other
+    /// than 2/3, so "installed but this token may not open it" surfaces as error 5 rather than
+    /// being reported as a missing driver.
+    /// </summary>
     public static bool IsInstalled()
     {
+        // Open() only ever returns IntPtr.Zero for an absent device; every other outcome is a
+        // real handle or a throw. So the previous "return h != INVALID_HANDLE_VALUE" was always
+        // true and told the reader nothing.
         var h = Open();
-        if (h == IntPtr.Zero) return false;      // absent driver: CreateFile failed with ERROR_FILE_NOT_FOUND
+        if (h == IntPtr.Zero) return false;
         try { CloseHandle(h); } catch { }
-        return h != INVALID_HANDLE_VALUE;
+        return true;
     }
 
     static IntPtr Open()
