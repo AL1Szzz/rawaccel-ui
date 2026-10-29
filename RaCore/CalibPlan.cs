@@ -51,27 +51,27 @@ public static class CalibPlan
 
     // ---------- scheduling ----------
 
-    public static List<Round> Explore(int candidateCount, int seed = 20261029)
+    public static List<Round> Explore(int candidateCount, int seed = 20261029) =>
+        Schedule(Enumerable.Range(0, candidateCount), Items, seed);
+
+    public static List<Round> Final(int baseIndex, int leaderIndex, int seed = 771) =>
+        Schedule(new[] { baseIndex, leaderIndex }, Items, seed, Phase.Final);
+
+    /// <summary>
+    /// One round per candidate per drill, shuffled. The ladder asks for exactly this but with three
+    /// drills at a time, so the drills are an argument here rather than always all five - the
+    /// interleaving rule is the part that has to stay identical between the two.
+    /// </summary>
+    public static List<Round> Schedule(IEnumerable<int> candidates, IEnumerable<DrillKind> items, int seed,
+                                      Phase phase = Phase.Explore)
     {
         var pairs = new List<(int cand, DrillKind item)>();
-        for (int c = 0; c < candidateCount; c++)
-            foreach (var item in Items)
+        foreach (int c in candidates)
+            foreach (var item in items)
                 pairs.Add((c, item));
 
         return Interleave(pairs, seed).Select((p, i) =>
-            new Round(i + 1, Phase.Explore, p.item, p.cand, RoundSeconds)).ToList();
-    }
-
-    public static List<Round> Final(int baseIndex, int leaderIndex, int seed = 771)
-    {
-        var pair = new List<int> { baseIndex, leaderIndex };
-        var pairs = new List<(int cand, DrillKind item)>();
-        foreach (int c in pair)
-            foreach (var item in Items)
-                pairs.Add((c, item));
-
-        return Interleave(pairs, seed).Select((p, i) =>
-            new Round(i + 1, Phase.Final, p.item, p.cand, RoundSeconds)).ToList();
+            new Round(i + 1, phase, p.item, p.cand, RoundSeconds)).ToList();
     }
 
     /// <summary>
@@ -219,11 +219,24 @@ public static class CalibPlan
         public List<string> Caveats = new();
     }
 
-    public static Verdict Decide(Ranking explore, IReadOnlyList<RoundResult> finalResults, int baseIndex)
+    public static Verdict Decide(Ranking explore, IReadOnlyList<RoundResult> finalResults, int baseIndex) =>
+        DecideHeadToHead(finalResults, baseIndex, Opponent(explore, baseIndex),
+                         leaderWasBase: explore.Leader == baseIndex,
+                         baseMeanRank: explore.MeanRank.TryGetValue(baseIndex, out var mr) ? mr : double.NaN,
+                         exploreItems: explore.PerItem.Count);
+
+    /// <summary>
+    /// The verdict for one head-to-head pair, independent of how the pair was picked. The single
+    /// sweep picks its challenger from the explore ranking; the ladder's challenger is whatever five
+    /// stages of narrowing landed on. Only the way they are described differs, so the bar they have
+    /// to clear is the same code in both.
+    /// </summary>
+    public static Verdict DecideHeadToHead(IReadOnlyList<RoundResult> finalResults, int baseIndex, int opponent,
+                                          bool leaderWasBase, double baseMeanRank, int exploreItems,
+                                          string challengerLabel = "", bool noAccelRan = true)
     {
-        int leader = explore.Leader;
-        int opponent = Opponent(explore, baseIndex);
-        var v = new Verdict { WinnerIndex = leader, WinnerIsBase = leader == baseIndex };
+        string who = challengerLabel.Length > 0 ? challengerLabel : $"候选 {opponent + 1}";
+        var v = new Verdict { WinnerIndex = opponent, WinnerIsBase = opponent == baseIndex };
 
         var rows = finalResults.Where(r => r.Valid).ToList();
         var pairs = new List<(DrillKind item, double baseScore, double leadScore, double baseCons, double leadCons)>();
@@ -274,9 +287,9 @@ public static class CalibPlan
         {
             v.WinnerIndex = opponent;
             v.WinnerIsBase = false;
-            v.Headline = $"有更合适的：候选 {opponent + 1}。";
-            v.Reasons.Add(leader == baseIndex
-                ? $"探索阶段它排第 {explore.MeanRank[baseIndex]:0.0}，决选里换了环境仍然赢 {v.FinalWins}/{pairs.Count} 个项目。"
+            v.Headline = $"有更合适的：{who}。";
+            v.Reasons.Add(leaderWasBase
+                ? $"探索阶段它排第 {baseMeanRank:0.0}，决选里换了环境仍然赢 {v.FinalWins}/{pairs.Count} 个项目。"
                 : $"决选里它在 {v.FinalWins}/{pairs.Count} 个项目上超过你现在这条。");
             v.Reasons.Add($"平均高出 {v.RelativeGain * 100:0.#}%" +
                           (withCons.Count > 0
@@ -287,10 +300,12 @@ public static class CalibPlan
         {
             v.WinnerIndex = baseIndex;
             v.WinnerIsBase = true;
-            if (leader == baseIndex)
+            if (leaderWasBase)
             {
                 v.Headline = "你现在的曲线就是这几档里最好的。";
-                v.Reasons.Add($"探索阶段它在 {explore.PerItem.Count} 个项目里平均排第 {explore.MeanRank[baseIndex]:0.0} 名。");
+                v.Reasons.Add(double.IsNaN(baseMeanRank)
+                    ? $"五轮递进之后，最合适的那一档就是你出发时那条。"
+                    : $"探索阶段它在 {exploreItems} 个项目里平均排第 {baseMeanRank:0.0} 名。");
             }
             else
             {
@@ -302,7 +317,8 @@ public static class CalibPlan
 
         v.Caveats.Add("每档每个项目只跑了一轮（决选两轮）。15 秒一轮的成绩波动本来就大，这测的是偏好，不是测量。");
         v.Caveats.Add("只有在你日常那个坐姿、那块鼠标垫、这个分辨率下的结果；换个桌面或换只鼠标就不算。");
-        v.Caveats.Add("无加速那一档是形状不同的对照，不是\"更弱的加速\"；赢它一点说明不了太多。");
+        if (noAccelRan)
+            v.Caveats.Add("无加速那一档是形状不同的对照，不是\"更弱的加速\"；赢它一点说明不了太多。");
         v.Caveats.Add("如果某一档让你手明显不舒服，哪怕分高也别选 —— 这里只记录了成绩，没记录难受。");
         return v;
     }

@@ -58,7 +58,7 @@
 
 ```powershell
 publish.cmd                     # 发布 + 用发布出来的二进制跑离线断言，不绿就别用这个构建
-app\RaProbe.exe --selftest      # 278 项离线断言
+app\RaProbe.exe --selftest      # 357 项离线断言
 ```
 
 每次 push / PR 会在 GitHub Actions 上跑同一套（`dotnet build -warnaserror` + 发布 RaProbe + `--selftest`），见 `.github/workflows/ci.yml`。只在 Windows 上跑：RaUI 是 WPF，RaCore 直接 p/invoke `CreateFileW` / `DeviceIoControl`，Linux 上没有可跑的东西。
@@ -74,9 +74,9 @@ app\RaUI.exe --dump-drill "$env:TEMP\d.png" --kind 3   # 训练场 0..8：网格
 app\RaUI.exe --dump-tooltip "$env:TEMP\t.png"          # 参数提示框（深底浅字，专门用来验颜色）
 app\RaUI.exe --dump-calib "$env:TEMP\c.png"            # 校准转盘
 app\RaUI.exe --calib-live 5                           # 真的开 5 秒转盘，报原始输入收到了多少包
-app\RaUI.exe --dump-calib-report "$env:TEMP\r.png"     # 盲测报告（合成数据，--stage round 看轮次卡片）
+app\RaUI.exe --dump-calib-report "$env:TEMP\r.png"     # 盲测报告（合成数据；--stage round 看轮次卡片，--stage nomove 看五轮都没打动的分支）
 app\RaUI.exe --calib-push-check                       # 临时改驱动曲线 → 回读 → 还原，并逐字节比对
-app\RaUI.exe --settings "$env:TEMP\copy.json" --calib-apply-check   # 真按一次报告上的「应用」和「加入我的方案」（写到副本，不动真文件）
+app\RaUI.exe --calib-apply-check   # 真按一次报告上的「应用」+「加入我的方案」：自动在 settings.json 副本上跑，结束时逐字节证明真文件没被改
 app\RaUI.exe --dump-tray                               # 托盘提示与右键菜单
 app\RaUI.exe --autostart-check                         # 自启项往返：装→查→原样还原
 ```
@@ -118,6 +118,27 @@ settings-path.txt   可选：只写一行路径。程序猜不到官方 settings
 ```
 
 驱动配置文件沿用官方的 `settings.json`：程序会在常见安装位置里找它（找不到就用自己数据目录里的一份，并在界面上写明），所以官方 GUI 和本程序改的是同一个文件。命令行想指定别的文件用 `--settings <路径>`。
+
+## 盲测为什么是五轮
+
+一次给五档、打一轮就下结论，问的其实是"这十五秒里哪档手感好"，答案大半是噪声。人手找手感的方式本来也不是这样：先大步试，挑个大概方向，再一步步往小里收。盲测默认就按这个来。
+
+| 轮 | 幅度 | 五档（相对本轮起点） | 跨度 |
+| --- | --- | --- | --- |
+| 1 | 大幅 | 0.59 / 0.77 / 1.00 / 1.30 / 1.69 | 2.86× |
+| 2 | 中幅 | 0.69 / 0.83 / 1.00 / 1.20 / 1.44 | 2.07× |
+| 3 | 中偏小 | 0.78 / 0.88 / 1.00 / 1.13 / 1.28 | 1.63× |
+| 4 | 中偏低 | 0.86 / 0.93 / 1.00 / 1.08 / 1.17 | 1.36× |
+| 5 | 最小 | 0.92 / 0.96 / 1.00 / 1.04 / 1.08 | 1.17× |
+
+每轮五档、每档跑三个项目（项目在五轮之间轮换，五个项目最后各跑三次），5×5×3 = 75 轮，加最后和"出发时那条"的 10 轮决选，共 85 轮约 25 分钟。中间那档永远就是上一轮的胜者，所以每一轮都在重新验它一次，而不是赢了就锁死。
+
+两条规则让收窄不至于自欺：
+
+- **分不出高下就不动。** 领先档要在一轮里比中间那档高出 3% 才换，否则中心原地不动。这是有代价的：最后两轮经常一分都不动，因为到那一步差异本来就小于能感觉到的程度 —— 这比"每次都往前挪一点"更诚实，后者等于在噪声上做随机游走。
+- **起点是"你用了半年的那条"。** 五轮结束不是直接采用结果，而是让结果和出发那条再打 10 轮；赢不下来就明确说"先别改"。
+
+几何、轮换和闸门都在 `RaCore/CalibLadder.cs`，不碰窗口也不碰驱动。自测里有一段把整个阶梯对着一个"虚构的真值"重放：从离真值 2.5 倍的起点出发，五轮之后落在真值的 5% 以内，且任一动作都不会让它离真值更远。
 
 ## 三处 DPI 到底谁说了算
 

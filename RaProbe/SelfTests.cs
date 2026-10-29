@@ -71,6 +71,9 @@ public static class SelfTests
         Console.WriteLine("\n== O. Sensitivity: output DPI vs the DPI on the mouse ==");
         Section("dpi", DpiChecks);
 
+        Console.WriteLine("\n== P. Ladder: five narrowing stages instead of one wide guess ==");
+        Section("ladder", LadderChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -1279,5 +1282,131 @@ public static class SelfTests
             finally { Presets.DirOverride = priorPresets; try { Directory.Delete(presetDir, true); } catch { } }
         }
         finally { CalibArchive.DirOverride = prior; try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // ---------- P ----------
+
+    /// <summary>
+    /// The ladder is a claim about convergence: five stages of five slots each should land nearer the
+    /// right number than one sweep can, and should stop moving once the steps stop being measurable.
+    /// Both halves are checked here - the geometry that narrows, and the gate that refuses to move
+    /// on a difference too small to feel, because a ladder that always moves would be a random walk
+    /// with extra steps.
+    /// </summary>
+    static void LadderChecks()
+    {
+        var stages = CalibLadder.Plan(5, 3);
+
+        Check(stages.Count == 5, "five stages, one per step size");
+        Check(stages.All(s => s.Multipliers.Length == CalibLadder.Slots), "each stage offers five slots");
+        Check(stages.All(s => Math.Abs(s.Multipliers[s.CentreSlot] - 1.0) < 1e-12),
+            "the middle slot is exactly the curve carried in, so a stage that finds nothing changes nothing");
+        Check(stages.All(s => s.Multipliers[0] < 1 && s.Multipliers[^1] > 1),
+            "every stage reaches both faster and slower - a one-sided stage cannot correct a wrong start");
+
+        // the whole point is that each stage covers less ground than the one before it
+        var spans = stages.Select(s => s.Span).ToList();
+        Check(spans.Zip(spans.Skip(1)).All(p => p.Second < p.First),
+            $"each stage spans less than the last ({string.Join(" → ", spans.Select(s => s.ToString("0.00")))}x)");
+        Check(Math.Abs(spans[0] - Math.Pow(1.30, 4)) < 1e-9 && Math.Abs(spans[^1] - Math.Pow(1.04, 4)) < 1e-9,
+            $"the first sweep covers {spans[0]:0.00}x, the last only {spans[^1]:0.00}x");
+        Check(spans[0] > 2.5 && spans[^1] < 1.2,
+            "so it starts wide enough to escape a bad neighbourhood and ends on a step too small to feel");
+
+        Check(CalibLadder.RoundCount(stages) == 85,
+            $"5 slots x 3 drills x 5 stages + the head to head = {CalibLadder.RoundCount(stages)} rounds");
+        Check(CalibLadder.RoundCount(stages, false) == 75, "75 of those before the head to head");
+
+        // drills rotate: fifteen slots across five drills has to come out even
+        var used = stages.SelectMany(s => s.Items).ToList();
+        Check(CalibPlan.Items.All(it => used.Count(x => x == it) == 3),
+            "every drill runs on exactly three stages, so no stage is judged on one drill's mood");
+        Check(stages.All(s => s.Items.Distinct().Count() == s.Items.Length),
+            "and no stage runs the same drill twice, which would just be one long round");
+
+        // the schedule inside a stage: every slot meets every drill once, never twice in a row
+        var sched = CalibPlan.Schedule(Enumerable.Range(0, 5), stages[0].Items, 1000);
+        Check(sched.Count == 15, "a stage of five slots on three drills is fifteen rounds");
+        Check(sched.GroupBy(r => r.CandidateIndex).All(g => g.Count() == 3 && g.Select(r => r.Item).Distinct().Count() == 3),
+            "every slot meets every drill of its stage exactly once");
+        Check(!sched.Where((r, i) => i > 0 && r.CandidateIndex == sched[i - 1].CandidateIndex).Any(),
+            "and no two rounds in a row use the same curve, so warm-up cannot look like a result");
+
+        // the gate: a stage only moves the centre when it can actually tell the slots apart
+        var st = stages[0];
+        Check(CalibLadder.Improved(StageResults(0, st, st.Multipliers, v => Same(v, st.Multipliers[3]) ? 110 : 100), st.CentreSlot, 3),
+            "a slot that is 10% better on every drill moves the centre");
+        Check(CalibLadder.Improved(StageResults(0, st, st.Multipliers, v => Same(v, st.Multipliers[3]) ? 105 : 100), st.CentreSlot, 3),
+            "5% still clears the gate");
+        Check(!CalibLadder.Improved(StageResults(0, st, st.Multipliers, v => Same(v, st.Multipliers[3]) ? 101 : 100), st.CentreSlot, 3),
+            "1% does not: that is noise, and moving on it would drag four stages into the wrong place");
+        Check(!CalibLadder.Improved(StageResults(0, st, st.Multipliers, v => Same(v, st.Multipliers[3]) ? 110 : 100), st.CentreSlot, 2),
+            "the centre cannot beat itself - a stage where it wins leaves it where it was");
+        Check(!CalibLadder.Improved(new List<CalibPlan.RoundResult>(), st.CentreSlot, 3), "no data is never an improvement");
+        Check(!CalibLadder.Improved(StageResults(0, st, st.Multipliers, v => Same(v, st.Multipliers[3]) ? 110 : 100), st.CentreSlot, 9),
+            "neither is a slot that never ran");
+
+        // convergence: start 2.5x away from the truth and see where five stages land
+        var far = Walk(2.5);
+        Check(Math.Abs(far.Centre / 2.5 - 1) < 0.05,
+            $"starting 2.5x off, five stages land at x{far.Centre:0.000} - within 5% of the true best");
+        Check(far.Moves >= 2, $"and it took {far.Moves} real moves to get there, not one lucky guess");
+        Check(far.Distances.Zip(far.Distances.Skip(1)).All(p => p.Second <= p.First + 1e-9),
+            $"the distance to the truth never grows ({string.Join(" → ", far.Distances.Select(d => d.ToString("0.000")))})");
+
+        var home = Walk(1.0);
+        Check(home.Moves == 0 && Math.Abs(home.Centre - 1.0) < 1e-12,
+            "when the curve you came with already is the best, no stage moves - the honest answer is 'don't change'");
+    }
+
+    static bool Same(double a, double b) => Math.Abs(a - b) < 1e-9;
+
+    /// <summary>One stage's worth of invented rounds, all valid, scores from <paramref name="skill"/>.</summary>
+    static List<CalibPlan.RoundResult> StageResults(int stagePos, CalibLadder.Stage stage, double[] slotValues,
+                                                   Func<double, double> skill)
+    {
+        var rounds = CalibPlan.Schedule(Enumerable.Range(0, stage.Multipliers.Length), stage.Items,
+                                        seed: 1000 + stagePos * 131);
+        return rounds.Select(r => new CalibPlan.RoundResult
+        {
+            Round = r,
+            Skill = skill(slotValues[r.CandidateIndex]),
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Replays the whole ladder offline against a made-up "truth": a curve that is
+    /// <paramref name="trueBest"/> times the starting one, scored by how far a slot is from it in log
+    /// space, plus 1% of jitter so the ordering is not handed to it. Returns where the centre ended
+    /// up, how many stages actually moved it, and the distance after each stage.
+    /// </summary>
+    static (double Centre, int Moves, List<double> Distances) Walk(double trueBest)
+    {
+        var stages = CalibLadder.Plan(5, 3);
+        double centre = 1.0;
+        int moves = 0;
+        var distances = new List<double>();
+
+        for (int s = 0; s < stages.Count; s++)
+        {
+            var stage = stages[s];
+            var vals = stage.Multipliers.Select(m => centre * m).ToArray();
+
+            var results = StageResults(s, stage, vals, v =>
+            {
+                double jitter = 1 + 0.01 * Math.Sin((s + 1) * 13 + Array.IndexOf(vals, v) * 7);
+                return 100 * Math.Exp(-Math.Pow(Math.Log(v / trueBest) / 0.35, 2)) * jitter;
+            });
+
+            int leader = CalibPlan.Rank(results, stage.Multipliers.Length).Leader;
+            if (CalibLadder.Improved(results, stage.CentreSlot, leader))
+            {
+                centre = vals[leader];
+                moves++;
+            }
+            distances.Add(Math.Abs(Math.Log(centre / trueBest)));
+        }
+
+        return (centre, moves, distances);
     }
 }

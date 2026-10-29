@@ -101,29 +101,37 @@
                         <StackPanel>
                             <TextBlock Text="曲线盲测" FontWeight="SemiBold" FontSize="14"/>
                             <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="拿你当前这条曲线做基准，扫一个参数生成几档候选，五档轮流在五个项目上各打一轮，全程不告诉你数值；跑完再让领先档和原值单挑一次，最后给出结论和证据量。"/>
+                                       Text="拿你当前这条曲线做基准，只扫一个参数，全程不告诉你数值。默认是五轮递进：第一轮大幅给五档，挑出最顺手的，之后围着它一轮比一轮收窄；最后和出发时那条正面比一轮，给出结论和证据量。每轮分不出高下就停在原地，不会追着噪声走。"/>
                             <Grid Margin="0,12,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="130"/>
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="扫描倍率（逗号分隔，须含 1.0）" VerticalAlignment="Center"
+                                <TextBlock Grid.Row="0" Text="怎么扫" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                           ToolTip="五轮递进：第一轮大幅给五档，挑出最顺手的，后面四轮围着它一轮比一轮收窄，最后和出发时那条正面比一轮。单轮：一次性给几档，挑一个就结束。"/>
+                                <ComboBox x:Name="CmbCalibMode" Grid.Row="0" Grid.Column="1" Height="28" Margin="6,3,0,3"
+                                          ToolTip="五轮递进（推荐）：5 轮 × 15 轮 + 最后 10 轮决选，约 25 分钟，最终精度约 ±5%。单轮：35 轮约 15 分钟，只能分辨很大的差别。">
+                                    <ComboBoxItem Content="五轮递进" Tag="1" IsSelected="True"/>
+                                    <ComboBoxItem Content="单轮" Tag="0"/>
+                                </ComboBox>
+                                <TextBlock x:Name="LblCalibMult" Grid.Row="1" Text="扫描倍率（逗号分隔，须含 1.0）" VerticalAlignment="Center"
                                            FontSize="12.5" Margin="0,3"
                                            ToolTip="1.0 是你现在这条曲线。倍率作用于该模式的主参数：classic 是加速度，jump 是跳跃倍率，natural 是衰减率，synchronous 是 motivity，power 是 scale，lut 是查表幅度。两轴一起扫。"/>
-                                <TextBox x:Name="TxtCalibMult" Grid.Row="0" Grid.Column="1" Text="0.5,1.0,1.5,2.0"
-                                         MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
-                                <TextBlock Grid.Row="1" Text="盲测方式" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
-                                <ComboBox x:Name="CmbCalibPlan" Grid.Row="1" Grid.Column="1" Height="28" Margin="6,3,0,3"
+                                <TextBox x:Name="TxtCalibMult" Grid.Row="1" Grid.Column="1" Text="0.5,1.0,1.5,2.0"
+                                         MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"
+                                         ToolTip="只在「单轮」模式下用；五轮递进用的是内置的 1.30 → 1.04 逐轮收窄。"/>
+                                <TextBlock Grid.Row="2" Text="盲测方式" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                <ComboBox x:Name="CmbCalibPlan" Grid.Row="2" Grid.Column="1" Height="28" Margin="6,3,0,3"
                                           ToolTip="两轴同步：水平和垂直的同一个参数一起缩放。手腕流分轴：水平的起始阈值往后推（小幅定位保持 1:1，大幅度横移才吃加速），垂直的往前推（一点点下压就吃加速），两轴强度同时变。">
                                     <ComboBoxItem Content="两轴同步" Tag="0" IsSelected="True"/>
                                     <ComboBoxItem Content="手腕流分轴" Tag="1"/>
                                 </ComboBox>
-                                <TextBlock Grid.Row="2" Text="总轮数（0 = 全跑，35 轮约 15 分钟）" VerticalAlignment="Center"
+                                <TextBlock Grid.Row="3" Text="总轮数（0 = 全跑，递进 85 轮约 25 分钟）" VerticalAlignment="Center"
                                            FontSize="12.5" Margin="0,3"/>
-                                <TextBox x:Name="TxtCalibRounds" Grid.Row="2" Grid.Column="1" Text="0"
+                                <TextBox x:Name="TxtCalibRounds" Grid.Row="3" Grid.Column="1" Text="0"
                                          MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
                             </Grid>
                             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">

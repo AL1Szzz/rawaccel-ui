@@ -35,6 +35,7 @@ public partial class TestPage : UserControl
         TxtCalibMult.Text = pr.CalibMultipliers;
         TxtCalibRounds.Text = pr.CalibRounds.ToString(CultureInfo.InvariantCulture);
         ChkCalibNoAccel.IsChecked = pr.CalibNoAccel;
+        SelectByTag(CmbCalibMode, pr.CalibMode.ToString());
         SelectByTag(CmbCalibPlan, pr.CalibPlan.ToString());
         TxtCrossArm.Text = pr.CrossArm.ToString("0.#", CultureInfo.InvariantCulture);
         TxtCrossGap.Text = pr.CrossGap.ToString("0.#", CultureInfo.InvariantCulture);
@@ -341,6 +342,10 @@ public partial class TestPage : UserControl
 
     int CalibRounds() => Math.Clamp(ParseI(TxtCalibRounds.Text, 0), 0, 200);
 
+    /// <summary>1 = 五轮递进（默认），0 = 单轮一次扫完。</summary>
+    int CalibMode() =>
+        int.TryParse((CmbCalibMode.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var v) ? v : 1;
+
     /// <summary>0 = 两轴同步扫一个参数；1 = 手腕流分轴（水平晚吃加速、垂直早吃加速）。</summary>
     Plan CalibPlan() =>
         int.TryParse((CmbCalibPlan.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var v) && v == 1
@@ -374,6 +379,7 @@ public partial class TestPage : UserControl
             Multipliers = CalibMultipliers(),
             IncludeNoAccel = ChkCalibNoAccel.IsChecked == true,
             Family = CalibPlan(),
+            Ladder = CalibMode() == 1,
             MaxRounds = CalibRounds(),
         });
 
@@ -555,6 +561,7 @@ public partial class TestPage : UserControl
         pr.CalibRounds = CalibRounds();
         pr.CalibNoAccel = ChkCalibNoAccel.IsChecked == true;
         pr.CalibPlan = (int)CalibPlan();
+        pr.CalibMode = CalibMode();
         pr.DrillSeconds = DrillSecondsValue;
         pr.DrillRadiusPx = DrillRadiusValue;
         AppState.SavePrefs();

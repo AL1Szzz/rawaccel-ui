@@ -86,18 +86,45 @@ public partial class App : Application
 
         // defaults: work on the official file wherever it is installed, else our own data folder
         string path = RaCore.SettingsFile.Default();
-        bool minimized = false, writeOnStart = false;
+        bool minimized = false, writeOnStart = false, chosenByArg = false;
 
         for (int i = 0; i < e.Args.Length; i++)
         {
             switch (e.Args[i])
             {
-                case "--settings" when i + 1 < e.Args.Length: path = e.Args[++i]; break;
+                case "--settings" when i + 1 < e.Args.Length: path = e.Args[++i]; chosenByArg = true; break;
                 case "--minimized": minimized = true; break;
                 case "--write": writeOnStart = true; break;
                 default:
-                    if (!e.Args[i].StartsWith("--") && e.Args[i].EndsWith(".json")) path = e.Args[i];
+                    if (!e.Args[i].StartsWith("--") && e.Args[i].EndsWith(".json"))
+                    {
+                        path = e.Args[i];
+                        chosenByArg = true;
+                    }
                     break;
+            }
+        }
+
+        // --calib-apply-check presses 应用 for real, and applying replaces the selected profile and
+        // saves the file. On the live file that means a synthetic test curve quietly becomes the
+        // player's actual one - which is exactly what happened once. Without an explicit --settings
+        // it now works on a copy and says so.
+        if (System.Array.Exists(e.Args, a => a == "--calib-apply-check") && !chosenByArg)
+        {
+            string copy = Path.Combine(Path.GetTempPath(), "raui-applycheck-settings.json");
+            try
+            {
+                File.Copy(path, copy, true);
+                applyCheckLive = path;
+                path = copy;
+                System.Console.WriteLine("apply-check works on a copy: " + copy);
+            }
+            catch (Exception ex)
+            {
+                System.Console.WriteLine("apply-check ABORTED: cannot copy the live settings (" +
+                                         ex.Message + ") - refusing to press 应用 on the real file.");
+                Current?.Shutdown();
+                return;
             }
         }
 
@@ -169,7 +196,14 @@ public partial class App : Application
         {
             Headless = true;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            CalibApplyCheck();
+            // Both shapes of the report, because they end in different verdicts: the ladder that
+            // found something has a curve to apply, and the ladder that found nothing has no
+            // candidate list left at all by the time the report is drawn.
+            CalibApplyCheck("");
+            CalibApplyCheck("nomove");
+            System.Console.WriteLine("done: neither report shape throws");
+            try { File.Delete(Path.Combine(Path.GetTempPath(), "raui-applycheck-settings.json")); } catch { }
+            Current?.Shutdown();
             return;
         }
 
@@ -588,21 +622,40 @@ public partial class App : Application
         }
     }
 
+    /// <summary>The live settings.json that an apply-check must never write to (see OnStartup).</summary>
+    static string applyCheckLive = "";
+
     /// <summary>
     /// Press 应用 and 加入我的方案 on an invented report. Both write things a player cares about
-    /// (the current curve, the preset library), so this runs against a scratch folder; the point is
-    /// only that neither button throws. "Apply" throwing is what killed the app at the end of a
-    /// finished session - and did it with the driver still holding a candidate curve.
+    /// (the current curve, the preset library), so this runs against a scratch folder and a copy of
+    /// the settings file; the point is only that neither button throws. "Apply" throwing is what
+    /// killed the app at the end of a finished session - and did it with the driver still holding a
+    /// candidate curve.
     /// </summary>
-    static void CalibApplyCheck()
+    static void CalibApplyCheck(string stage)
     {
         var scratch = Path.Combine(Path.GetTempPath(), "raui-applycheck-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(scratch);
         Presets.DirOverride = Path.Combine(scratch, "presets");
         CalibArchive.DirOverride = Path.Combine(scratch, "sessions");
 
+        byte[] liveBytes = Array.Empty<byte>();
+        try { if (applyCheckLive.Length > 0) liveBytes = File.ReadAllBytes(applyCheckLive); } catch { }
+
+        // each shape starts from the same untouched file, so the second run does not inherit the
+        // first one's applied curve
+        if (applyCheckLive.Length > 0)
+        {
+            try { File.Copy(applyCheckLive, Path.Combine(Path.GetTempPath(), "raui-applycheck-settings.json"), true); }
+            catch (Exception ex) { System.Console.WriteLine("[warn] could not re-copy the settings: " + ex.Message); }
+        }
+
         string before = App.State.SelectedProfile?.Name ?? "(none)";
-        var w = new CalibrationSessionWindow(new CalibrationSessionWindow.Options { DebugReport = true });
+        var w = new CalibrationSessionWindow(new CalibrationSessionWindow.Options
+        {
+            DebugReport = true,
+            DebugStage = stage,
+        });
         w.Show();
         w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
 
@@ -623,17 +676,18 @@ public partial class App : Application
             }
         }
 
+        string shape = stage.Length > 0 ? $"[{stage}] " : "[found] ";
         try
         {
             Press("OnSavePlan");
             System.Console.WriteLine(w.SavedAsPlan
-                ? "加入我的方案 ok: 存成了一条预设，当前曲线没动"
-                : "加入我的方案 FAILED: 没有存下来");
+                ? shape + "加入我的方案 ok: 存成了一条预设，当前曲线没动"
+                : shape + "加入我的方案 FAILED: 没有存下来");
 
             Press("OnApply");
             System.Console.WriteLine(w.Accepted
-                ? $"应用 ok: 结果写进了「{before}」，没有抛异常"
-                : "应用 FAILED: 没有接受结果");
+                ? shape + $"应用 ok: 结果写进了「{before}」，没有抛异常"
+                : shape + "应用 FAILED: 没有接受结果");
         }
         catch (Exception ex)
         {
@@ -642,10 +696,24 @@ public partial class App : Application
         }
 
         try { w.Close(); } catch { }
+
+        // proof rather than trust: the file the player actually uses has to come out of this
+        // untouched - pressing 应用 on the live file once rewrote their acceleration to 0.186
+        if (liveBytes.Length > 0)
+        {
+            try
+            {
+                bool same = File.ReadAllBytes(applyCheckLive).AsSpan().SequenceEqual(liveBytes);
+                System.Console.WriteLine(shape + (same
+                    ? "真实配置没被动过（逐字节相同）"
+                    : "!! 真实配置被改动了 —— 这是必须修的 bug"));
+            }
+            catch (Exception ex) { System.Console.WriteLine(shape + "读不回真实配置：" + ex.Message); }
+        }
+
         Presets.DirOverride = null;
         CalibArchive.DirOverride = null;
         try { Directory.Delete(scratch, true); } catch { }
-        Current?.Shutdown();
     }
 
     /// <summary>
@@ -694,7 +762,7 @@ public partial class App : Application
     {
         var w = new CalibrationSessionWindow(new CalibrationSessionWindow.Options
         {
-            DebugReport = stage.Length == 0 || stage == "report",
+            DebugReport = stage.Length == 0 || stage is "report" or "nomove",
             DebugStage = stage,
         });
         w.Show();

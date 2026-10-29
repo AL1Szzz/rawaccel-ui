@@ -38,10 +38,10 @@
                 <TextBlock Text="01 转角确认" Foreground="{StaticResource TextPrimaryBrush}" FontSize="12.5"/>
             </Border>
             <Border x:Name="Step2" Style="{StaticResource Chip}">
-                <TextBlock Text="02 探索 25 轮" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12.5"/>
+                <TextBlock x:Name="Step2Text" Text="02 探索 25 轮" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12.5"/>
             </Border>
             <Border x:Name="Step3" Style="{StaticResource Chip}">
-                <TextBlock Text="03 决选 10 轮" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12.5"/>
+                <TextBlock x:Name="Step3Text" Text="03 决选 10 轮" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12.5"/>
             </Border>
             <Border x:Name="Step4" Style="{StaticResource Chip}">
                 <TextBlock Text="04 结果报告" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12.5"/>
@@ -146,6 +146,10 @@
                                 <GridView x:Name="ItemGrid"/>
                             </ListView.View>
                         </ListView>
+
+                        <TextBlock x:Name="LadderTitle" Text="五轮是怎么走过来的" FontWeight="SemiBold" FontSize="13"
+                                   Margin="0,14,0,6" Foreground="{StaticResource TextPrimaryBrush}" Visibility="Collapsed"/>
+                        <ItemsControl x:Name="LadderList" FontSize="12.5" Visibility="Collapsed"/>
 
                         <TextBlock Text="候选的真实数值（测完才公开）" FontWeight="SemiBold" FontSize="13"
                                    Margin="0,14,0,6" Foreground="{StaticResource TextPrimaryBrush}"/>

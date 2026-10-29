@@ -38,6 +38,8 @@ public static class CalibArchive
 
     public sealed class RoundRow
     {
+        /// <summary>Ladder stage this round belongs to, -1 when the session was a single sweep.</summary>
+        public int Stage { get; set; } = -1;
         public string Phase { get; set; } = "";
         public string Item { get; set; } = "";
         public int Candidate { get; set; }
@@ -59,6 +61,8 @@ public static class CalibArchive
         public int RoundsPlanned { get; set; }
         public List<CandidateRow> Candidates { get; set; } = new();
         public List<RoundRow> Rounds { get; set; } = new();
+        /// <summary>One line per ladder stage: what the stage decided. Empty for a single sweep.</summary>
+        public List<string> StageNotes { get; set; } = new();
 
         public bool Finished { get; set; }
         public string Headline { get; set; } = "";
