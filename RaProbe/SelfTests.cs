@@ -56,6 +56,12 @@ public static class SelfTests
         Console.WriteLine("\n== J. SettingsFile: the official path is found, never assumed ==");
         Section("settings", SettingsChecks);
 
+        Console.WriteLine("\n== K. Drills: where targets go and what a point is worth ==");
+        Section("drills", DrillChecks);
+
+        Console.WriteLine("\n== L. Calibration: the turn, the conversion, and the crosshair ==");
+        Section("calibration", CalibrationChecks);
+
         Console.WriteLine();
         Console.WriteLine($"   {checks} checks, {failures.Count} failed");
         foreach (var f in failures) Console.WriteLine("   FAILED: " + f);
@@ -497,6 +503,145 @@ public static class SelfTests
         var fx = CurveAnalysis.Analyze(Convert4.ToStruct(flat), true);
         Check(fx.Threshold == 0 && double.IsInfinity(fx.CapSpeed) && Math.Abs(fx.PeakGain - 1) < 1e-6,
             "a profile with no acceleration reads as no acceleration (threshold 0, no cap, gain 1)");
+    }
+
+    // ---------- K ----------
+
+    static void DrillChecks()
+    {
+        var area = DrillField.Usable(1920, 1080);
+        Check(Math.Abs(area.X - 48) < 1e-9 && Math.Abs(area.Y - 96) < 1e-9
+              && Math.Abs(area.W - 1824) < 1e-9 && Math.Abs(area.H - 936) < 1e-9,
+            "the usable area keeps clear of the banner and the edges");
+
+        var grid = DrillField.Grid(area, 6, 3);
+        Check(grid.Length == 18, "gridshot lattice is cols x rows cells (18)");
+        Check(grid.All(p => area.Fits(p.x, p.y, 22)), "every cell can hold a 22px target");
+        Check(grid.Distinct().Count() == grid.Length, "no two cells are the same point");
+        Check(Math.Abs(grid[0].x - (area.X + area.W / 12)) < 1e-9,
+            "the first cell is inset by half a cell, not flush with the edge");
+        double stepX = grid[1].x - grid[0].x, stepY = grid[6].y - grid[0].y;
+        Check(grid.Take(6).All(p => Math.Abs((p.x - grid[0].x) % stepX) < 1e-6) && stepX > 22 * 2,
+            "columns are evenly spaced further apart than a target is wide");
+        Check(stepY > 22 * 2, "rows are far enough apart not to touch");
+
+        var six = DrillField.Six(area);
+        Check(six.Length == 6, "sixshot places six targets");
+        Check(six.All(p => area.Fits(p.x, p.y, 22)), "all six are inside the usable area");
+        double cx = area.X + area.W / 2, cy = area.Y + area.H / 2;
+        Check(Math.Abs(six.Average(p => p.x) - cx) < 1e-6 && Math.Abs(six.Average(p => p.y) - cy) < 1e-6,
+            "the six are centred on the field");
+        Check(six[0].y == six[1].y && six[0].y == six[2].y && six[3].y == six[4].y && six[3].y == six[5].y,
+            "two rows of three, not a scatter");
+        Check(six[0].y < six[3].y, "row one sits above row two");
+
+        // FreeCells must be a selection, never a repeat
+        var rng = new Random(7);
+        var picked = DrillField.FreeCells(18, new HashSet<int> { 0, 1, 2 }, 5, rng);
+        Check(picked.Count == 5 && picked.Distinct().Count() == 5, "five free cells picked, all different");
+        Check(!picked.Contains(0) && !picked.Contains(1) && !picked.Contains(2), "occupied cells are never offered");
+        var full = DrillField.FreeCells(3, new HashSet<int> { 0, 1, 2 }, 2, rng);
+        Check(full.Count == 0, "a full lattice yields nothing instead of squeezing a target in");
+
+        // tracking motion: deterministic, and it must not leave the field
+        var a2 = new DrillField.Area(0, 0, 100, 100);
+        var (x1, y1, vx1, _) = DrillField.StepTracker(50, 50, 1000, 0, 1000, a2, 5);
+        Check(Math.Abs(x1 - 95) < 1e-9 && vx1 < 0, "a target that leaves the right edge is put back inside");
+        var (x2, y2, _, _) = DrillField.StepTracker(50, 50, 1000, 0, 1000, a2, 5);
+        Check(x1 == x2 && y1 == y2, "same state and step give the same position");
+        bool stayed = true;
+        double px = 50, py = 50, pvx = 900, pvy = -700;
+        for (int i = 0; i < 2000; i++)
+        {
+            (px, py, pvx, pvy) = DrillField.StepTracker(px, py, pvx, pvy, 16, a2, 5);
+            if (!a2.Fits(px, py, 5)) { stayed = false; break; }
+        }
+        Check(stayed, "2000 steps of tracking never leaves the field");
+
+        // scoring
+        var gridRun = new DrillRun(DrillKind.Gridshot, 60);
+        gridRun.Advance(30_000);
+        for (int i = 0; i < 10; i++) gridRun.Click(i < 7);
+        Check(gridRun.Shots == 10 && gridRun.Hits == 7, "clicks and hits are counted separately");
+        Check(Math.Abs(gridRun.HitRatePct - 70) < 1e-9, "hit rate is hits over clicks (70%)");
+        Check(Math.Abs(gridRun.HitsPerMinute - 14) < 1e-9, "7 hits in 30s is 14 per minute");
+        Check(!gridRun.Finished, "30s of a 60s round is not finished");
+        gridRun.Advance(30_000);
+        Check(gridRun.Finished && Math.Abs(gridRun.ElapsedMs - 60_000) < 1e-9, "the round ends on the clock, exactly");
+        gridRun.Click(true);
+        Check(gridRun.Hits == 7, "a click after the whistle does not count");
+
+        var sixRun = new DrillRun(DrillKind.Sixshot, 60);
+        sixRun.Click(true); sixRun.Click(true); sixRun.Click(true); sixRun.Click(true);
+        sixRun.Click(true, completesSet: true);
+        sixRun.Click(true, completesSet: true);
+        Check(sixRun.SetsCleared == 2 && sixRun.Hits == 6, "a set is only counted when its last target falls");
+        sixRun.Advance(20_000);
+        Check(Math.Abs(sixRun.SecondsPerSet - 10) < 1e-9, "two sets in 20s is 10s per set");
+
+        var trackRun = new DrillRun(DrillKind.Tracking, 30);
+        trackRun.Tick(1000, true, true);
+        trackRun.Tick(1000, true, false);
+        trackRun.Tick(500, false, true);
+        Check(Math.Abs(trackRun.HeldMs - 2000) < 1e-9, "released time is not measured");
+        Check(Math.Abs(trackRun.OnTargetMs - 1000) < 1e-9, "only on-target time with the button down counts");
+        Check(Math.Abs(trackRun.LongestOnTargetMs - 1000) < 1e-9, "the unbroken stretch ends when the view leaves");
+        Check(Math.Abs(trackRun.OnTargetPct - 50) < 1e-9, "half the held time on target reads as 50%");
+        Check(!trackRun.Score().Contains("NaN"), "the score line stays printable with a zero denominator");
+
+        var empty = new DrillRun(DrillKind.Tracking, 30);
+        Check(empty.OnTargetPct == 0 && !empty.Score().Contains("NaN"), "no clicks at all does not divide by zero");
+    }
+
+    // ---------- L ----------
+
+    static void CalibrationChecks()
+    {
+        var t = new TurnMeasure { Sensitivity = 1.5, Dpi = 600 };
+        t.Add(1000);
+        t.Add(-400);
+        t.Add(100);
+        Check(t.Counts == 700 && t.Packets == 3, "counts add up and every packet is counted");
+        Check(Math.Abs(t.AngleDeg - 700 * 0.022 * 1.5) < 1e-9, "angle is counts x m_yaw x sensitivity");
+        Check(Math.Abs(t.Cm - 700 / 600.0 * 2.54) < 1e-9, "cm is counts / DPI x 2.54");
+        Check(!t.Full, "700 counts at 1.5 is nowhere near a full turn");
+        t.Reset();
+        Check(t.Counts == 0 && t.Packets == 0 && t.AngleDeg == 0, "reset clears both the counts and the packet count");
+
+        // a full turn, then one more click, must read as full and stay printable
+        var full = new TurnMeasure { Sensitivity = 1.5, Dpi = 600 };
+        full.Add((long)Math.Ceiling(360 / (0.022 * 1.5)));
+        Check(full.Full && full.Progress >= 1.0, "360 degrees' worth of counts completes the dial");
+        Check(Math.Abs(full.CmPer360Implied - SourceAim.CmPer360(1.5, 600)) < 1e-9,
+            "the implied cm/360 is the same conversion the rest of the app uses");
+        Check(Math.Abs(full.Cm - Math.Abs(full.CmPer360Implied)) < 0.5,
+            "the distance the dial took and the implied cm/360 are the same number, as they must be");
+
+        // the two conversions have to be exact inverses or the calibration window would lie
+        double back = SourceAim.CmPer360(SourceAim.SensForCm360(30, 800), 800);
+        Check(Math.Abs(back - 30) < 1e-9, "sens for 30cm/360 round-trips back to 30cm/360");
+        double dpiBack = SourceAim.DpiForCm360(SourceAim.CmPer360(2.0, 1600), 2.0);
+        Check(Math.Abs(dpiBack - 1600) < 1e-6, "a real cm/360 recovers the DPI it was measured at");
+        Check(SourceAim.SensForCm360(30, 0) == 0 && SourceAim.DpiForCm360(0, 1.5) == 0,
+            "zero DPI or zero cm/360 returns zero, not infinity");
+
+        var c = CrosshairGeometry.Place(960, 700, 9, 3, 1.0);
+        Check(Math.Abs(c.Thickness - 2) < 1e-9, "the crosshair is 2 physical pixels thick");
+        Check(Math.Abs(c.Left.X - 948) < 1e-9 && Math.Abs(c.Right.X - 963) < 1e-9,
+            "arms sit a gap away from the centre on both sides");
+        Check(Math.Abs(c.Top.Y - 688) < 1e-9 && Math.Abs(c.Bottom.Y - 703) < 1e-9,
+            "vertical arms are the same distance out as the horizontal ones");
+        Check(Math.Abs(c.Dot.X - 959) < 1e-9 && Math.Abs(c.Dot.Y - 699) < 1e-9
+              && Math.Abs(c.Dot.W - 2) < 1e-9, "the dot is centred on the pointer and the same size as the arms");
+        Check(Math.Abs(c.Left.W - 9) < 1e-9, "arm length is the number the player typed");
+
+        var s2 = CrosshairGeometry.Place(960, 700, 9, 3, 2.0);
+        Check(Math.Abs(s2.Left.X - 474) < 1e-9 && Math.Abs(s2.Left.W - 4.5) < 1e-9
+              && Math.Abs(s2.Thickness - 1) < 1e-9,
+            "on a 200% display the same crosshair halves in DIPs and covers the same physical pixels");
+
+        var noArm = CrosshairGeometry.Place(100, 100, 0, 3, 1.0);
+        Check(noArm.Left.W == 0 && noArm.Dot.W == 2, "arm length 0 leaves only the dot");
     }
 
     // ---------- I ----------

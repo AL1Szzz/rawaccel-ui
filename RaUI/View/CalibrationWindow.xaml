@@ -1,0 +1,91 @@
+<Window x:Class="RaUI.View.CalibrationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Sensitivity calibration"
+        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False"
+        Topmost="True" Background="#FF0E1013"
+        KeyDown="OnKeyDown" Closed="OnClosed">
+    <Grid Margin="0,0,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,28,0,0">
+            <TextBlock Text="灵敏度校准" Foreground="#FFFFFFFF" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+            <TextBlock x:Name="SubText" Foreground="#99FFFFFF" FontSize="12" Margin="0,6,0,0"
+                       HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="760" TextAlignment="Center"
+                       Text="推鼠标，让红色的起始标记转回正上方。这一圈推了多远，就是你的 cm/360。"/>
+        </StackPanel>
+
+        <Viewbox Grid.Row="1" Stretch="Uniform" MaxWidth="600" MaxHeight="600" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Grid Width="400" Height="400">
+            <Canvas x:Name="Dial" Width="400" Height="400" RenderTransformOrigin="0.5,0.5">
+                <Canvas.RenderTransform>
+                    <RotateTransform x:Name="DialRotate" Angle="0"/>
+                </Canvas.RenderTransform>
+            </Canvas>
+
+            <Ellipse Width="300" Height="300" Stroke="#33FFFFFF" StrokeThickness="1" IsHitTestVisible="False"/>
+
+            <!-- fixed pointer: the mark that has to come back to zero -->
+            <Polygon Points="200,6 194,22 206,22" Fill="#FFFF5B5B" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                <TextBlock x:Name="AngleText" Text="0°" Foreground="#FFFFFFFF" FontSize="34" FontWeight="SemiBold"
+                           HorizontalAlignment="Center"/>
+                <TextBlock x:Name="LapText" Text="还没转到一圈" Foreground="#80FFFFFF" FontSize="12"
+                           HorizontalAlignment="Center" Margin="0,6,0,0"/>
+            </StackPanel>
+        </Grid>
+        </Viewbox>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,18">
+            <StackPanel Width="190" Margin="10,0">
+                <TextBlock Text="手推过的距离" Foreground="#66FFFFFF" FontSize="11" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="CmText" Text="0.0 cm" Foreground="#FFFFFFFF" FontSize="19" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+            </StackPanel>
+            <StackPanel Width="190" Margin="10,0">
+                <TextBlock Text="原始计数（水平）" Foreground="#66FFFFFF" FontSize="11" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="CountsText" Text="0" Foreground="#FFFFFFFF" FontSize="19" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+            </StackPanel>
+            <StackPanel Width="190" Margin="10,0">
+                <TextBlock Text="当前设置等于" Foreground="#66FFFFFF" FontSize="11" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="ImpliedText" Text="—" Foreground="#FFFFFFFF" FontSize="19" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+            </StackPanel>
+        </StackPanel>
+
+        <Border Grid.Row="3" Background="#14FFFFFF" CornerRadius="8" Padding="18,12" Margin="40,0,40,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="游戏灵敏度" Foreground="#B3FFFFFF" FontSize="12.5" VerticalAlignment="Center"/>
+                <TextBox x:Name="TxtSens" Grid.Column="1" MinHeight="28" Margin="8,0,18,0" VerticalAlignment="Center" Text="1.5"/>
+
+                <TextBlock Grid.Column="2" Text="鼠标 DPI" Foreground="#B3FFFFFF" FontSize="12.5" VerticalAlignment="Center"/>
+                <TextBox x:Name="TxtDpi" Grid.Column="3" MinHeight="28" Margin="8,0,18,0" VerticalAlignment="Center" Text="600"/>
+
+                <TextBlock Grid.Column="4" Text="想要多少 cm 转一圈" Foreground="#B3FFFFFF" FontSize="12.5" VerticalAlignment="Center"/>
+                <TextBox x:Name="TxtTarget" Grid.Column="5" MinHeight="28" Margin="8,0,18,0" VerticalAlignment="Center" Text="30"/>
+
+                <Button x:Name="BtnApply" Grid.Column="6" Content="算出灵敏度" MinHeight="30" MinWidth="104" Click="OnApply"/>
+            </Grid>
+        </Border>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,22">
+            <TextBlock x:Name="ResultText" Text="" Foreground="#FF9EE493" FontSize="13" Margin="0,0,18,0" VerticalAlignment="Center"/>
+            <TextBlock Text="R 重新开始 · Esc 退出（转盘回到起点就算一圈）" Foreground="#66FFFFFF" FontSize="12" VerticalAlignment="Center"/>
+        </StackPanel>
+    </Grid>
+</Window>

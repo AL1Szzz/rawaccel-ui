@@ -33,6 +33,11 @@ public sealed class RoundRow
     public string Resolution = "";
     public string PlanName = "";          // the curve the driver was serving at round start
     public string ConfigSha = "";
+    /// <summary>
+    /// Free-form second half of the score line. The ball test leaves it empty and the drill modes put
+    /// "87 个 · 43 每分钟" here; appending a column keeps the files written by earlier builds readable.
+    /// </summary>
+    public string Extra = "";
 
     public double HitRate => Clicks > 0 ? Cleared * 100.0 / Clicks : 0;
 
@@ -54,7 +59,7 @@ public sealed class RoundRow
 /// </summary>
 public static class ScoreHistory
 {
-    const string Header = "时间;成绩模式;点掉;点击数;命中率;用时秒;同屏球数;距离px;半径px;方向;分辨率;方案;配置sha";
+    const string Header = "时间;成绩模式;点掉;点击数;命中率;用时秒;同屏球数;距离px;半径px;方向;分辨率;方案;配置sha;补充";
     const int MaxRows = 500;
 
     /// <summary>Redirect for the self tests so they never touch the real history.</summary>
@@ -90,6 +95,7 @@ public static class ScoreHistory
                     SessionMs = D(f[5]) * 1000.0,
                     Balls = I(f[6]), DistancePx = D(f[7]), RadiusPx = D(f[8]),
                     Direction = f[9], Resolution = f[10], PlanName = f[11], ConfigSha = f[12],
+                    Extra = f.Length > 13 ? f[13] : "",
                 });
             }
         }
@@ -109,7 +115,7 @@ public static class ScoreHistory
         lines.AddRange(rows.Select(r => string.Join(";",
             Clean(r.When), Clean(r.Mode), r.Cleared, r.Clicks, $"{r.HitRate:0.0}",
             N(r.SessionMs / 1000.0), r.Balls, N(r.DistancePx), N(r.RadiusPx),
-            Clean(r.Direction), Clean(r.Resolution), Clean(r.PlanName), Clean(r.ConfigSha))));
+            Clean(r.Direction), Clean(r.Resolution), Clean(r.PlanName), Clean(r.ConfigSha), Clean(r.Extra))));
 
         // atomic replace: a crash mid-write must not leave a half line in the history
         var tmp = FilePath + ".tmp";

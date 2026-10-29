@@ -29,6 +29,13 @@ public sealed class UiPrefs
     /// <summary>Driver device id whose curve is recorded with a round; empty = the one the UI serves.</summary>
     [JsonPropertyName("testDeviceId")] public string TestDeviceId { get; set; } = "";
 
+    /// <summary>训练场：0 网格速击 / 1 六目标 / 2 跟枪。</summary>
+    [JsonPropertyName("drillKind")] public int DrillKind { get; set; }
+    [JsonPropertyName("drillSeconds")] public int DrillSeconds { get; set; } = 60;
+    [JsonPropertyName("drillRadiusPx")] public double DrillRadiusPx { get; set; } = 22;
+    /// <summary>校准时想要的 cm/360，只用来算建议灵敏度。</summary>
+    [JsonPropertyName("targetCm360")] public double TargetCm360 { get; set; } = 30;
+
     /// <summary>Crosshair drawn at the pointer hotspot during the test (physical pixels).</summary>
     [JsonPropertyName("crossArm")] public double CrossArm { get; set; } = 9;
     [JsonPropertyName("crossGap")] public double CrossGap { get; set; } = 3;

@@ -22,4 +22,27 @@ public static class SourceAim
         if (sensitivity <= 0 || dpi <= 0) return 0;
         return 360 * CountsPerDegree(sensitivity) / dpi * 2.54;
     }
+
+    /// <summary>
+    /// The sensitivity that makes a full turn take <paramref name="cm360"/> of hand travel.
+    /// Inverse of <see cref="CmPer360"/>; the calibration window uses it to answer "想要 30cm 转一圈，
+    /// 游戏里该填多少".
+    /// </summary>
+    public static double SensForCm360(double cm360, double dpi)
+    {
+        if (cm360 <= 0 || dpi <= 0) return 0;
+        double countsPer360 = cm360 / 2.54 * dpi;
+        return countsPer360 > 0 ? 360.0 / (M_YAW * countsPer360) : 0;
+    }
+
+    /// <summary>
+    /// The DPI implied by a known cm/360 and sensitivity. This is the one direction that can catch a
+    /// wrong DPI: a player who measured their real cm/360 in game and got a different number than
+    /// <see cref="CmPer360"/> predicts is not moving the mouse the way the setting says.
+    /// </summary>
+    public static double DpiForCm360(double cm360, double sensitivity)
+    {
+        if (cm360 <= 0 || sensitivity <= 0) return 0;
+        return 360 * CountsPerDegree(sensitivity) / cm360 * 2.54;
+    }
 }

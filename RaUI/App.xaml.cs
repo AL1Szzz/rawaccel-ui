@@ -60,6 +60,39 @@ public partial class App : Application
             return;
         }
 
+        // headless visual check of the drill window, one mode per run (--dump-drill out.png --kind 1)
+        int drillIdx = System.Array.FindIndex(e.Args, a => a == "--dump-drill");
+        if (drillIdx >= 0)
+        {
+            Headless = true;
+            DumpDrill(drillIdx + 1 < e.Args.Length ? e.Args[drillIdx + 1] : @"C:\temp\drill.png",
+                      IntArg(e.Args, "--kind"));
+            Shutdown();
+            return;
+        }
+
+        // headless visual check of the calibration dial (--dump-calib out.png)
+        int calibIdx = System.Array.FindIndex(e.Args, a => a == "--dump-calib");
+        if (calibIdx >= 0)
+        {
+            Headless = true;
+            DumpCalib(calibIdx + 1 < e.Args.Length ? e.Args[calibIdx + 1] : @"C:\temp\calib.png");
+            Shutdown();
+            return;
+        }
+
+        // live raw-input check: open the dial for N seconds and report what the mouse delivered.
+        // Offscreen renders cannot prove WM_INPUT is wired up, and a dead dial looks identical to
+        // "the mouse did not move", so this one has to run for real.
+        int liveIdx = System.Array.FindIndex(e.Args, a => a == "--calib-live");
+        if (liveIdx >= 0)
+        {
+            Headless = true;
+            CalibLive(liveIdx + 1 < e.Args.Length && int.TryParse(e.Args[liveIdx + 1], out var secs) ? secs : 5);
+            Shutdown();
+            return;
+        }
+
         // headless visual check: render offscreen to a PNG and quit (never steals focus)
         int dumpIdx = System.Array.FindIndex(e.Args, a => a == "--dump-ui");
         if (dumpIdx >= 0)
@@ -310,5 +343,96 @@ public partial class App : Application
 
         w.Close();
         System.Console.WriteLine($"dumped {outPng} (window {pw}x{ph}, cursor faked at {cx},{cy})");
+    }
+
+    static int IntArg(string[] args, string name)
+    {
+        int i = System.Array.FindIndex(args, a => a == name);
+        return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out var v) ? v : 0;
+    }
+
+    /// <summary>Offscreen render of one drill mode: no countdown, no timer, no display change.</summary>
+    void DumpDrill(string outPng, int kind)
+    {
+        var cfg = new DrillWindow.Config
+        {
+            Kind = (RaCore.DrillKind)Math.Clamp(kind, 0, 2),
+            Seconds = 60,
+            RadiusPx = 22,
+            Alive = 3,
+            CrossArm = 9,
+            CrossGap = 3,
+            CrossColor = "#FFFFFFFF",
+            CrossDot = true,
+            Resolution = null,
+            DebugCursorPx = (960, 700),
+        };
+
+        var w = new DrillWindow(cfg)
+        {
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Topmost = false,
+            Left = -30000,
+            Top = -30000,
+        };
+        w.Show();
+        Capture(w, outPng, $"kind {cfg.Kind}");
+    }
+
+    /// <summary>Offscreen render of the calibration dial at a fixed angle.</summary>
+    void DumpCalib(string outPng)
+    {
+        var cfg = new CalibrationWindow.Config { Sens = 1.5, Dpi = 600, TargetCm360 = 30, DebugStatic = true };
+        var w = new CalibrationWindow(cfg)
+        {
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Topmost = false,
+            Left = -30000,
+            Top = -30000,
+        };
+        w.Show();
+        Capture(w, outPng, "calibration");
+    }
+
+    /// <summary>Open the calibration dial for a few seconds and print what raw input delivered.</summary>
+    void CalibLive(int seconds)
+    {
+        var w = new CalibrationWindow(new CalibrationWindow.Config { Sens = 1.5, Dpi = 600, TargetCm360 = 30 });
+        w.Show();
+        w.Activate();
+
+        var until = DateTime.UtcNow.AddSeconds(Math.Clamp(seconds, 1, 30));
+        while (DateTime.UtcNow < until)
+        {
+            w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            System.Threading.Thread.Sleep(16);
+        }
+
+        string err = w.RawError;
+        System.Console.WriteLine(err.Length > 0
+            ? "raw input FAILED: " + err
+            : $"raw input ok: counts={w.RawCounts} packets={w.RawPackets}");
+        w.Close();
+    }
+
+    static void Capture(Window w, string outPng, string what)
+    {
+        w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+        w.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+
+        int pw = (int)w.ActualWidth, ph = (int)w.ActualHeight;
+        var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(pw, ph, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+        rtb.Render(w);
+
+        var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
+        var dir = System.IO.Path.GetDirectoryName(outPng);
+        if (dir != null && !System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+        using (var fs = System.IO.File.Create(outPng)) enc.Save(fs);
+
+        w.Close();
+        System.Console.WriteLine($"dumped {outPng} (window {pw}x{ph}, {what})");
     }
 }

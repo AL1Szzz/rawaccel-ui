@@ -38,6 +38,58 @@
                         </StackPanel>
                     </Border>
 
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="训练场" FontWeight="SemiBold" FontSize="14"/>
+                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="三个固定项目，跟着上面的分辨率设置一起跑。成绩进下面的历史。"/>
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="104"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Text="项目" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"
+                                           ToolTip="网格速击：同屏几个目标，点掉一个换个格子。六目标：六个固定位置，全清才算一组。跟枪：按住左键压住移动目标。"/>
+                                <ComboBox x:Name="CmbDrill" Grid.Row="0" Grid.Column="1" Height="28" Margin="6,3,0,3">
+                                    <ComboBoxItem Content="网格速击" Tag="0" IsSelected="True"/>
+                                    <ComboBoxItem Content="六目标" Tag="1"/>
+                                    <ComboBoxItem Content="跟枪" Tag="2"/>
+                                </ComboBox>
+
+                                <TextBlock Grid.Row="1" Text="时长 秒" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                <TextBox x:Name="TxtDrillSeconds" Grid.Row="1" Grid.Column="1" Text="60" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+
+                                <TextBlock Grid.Row="2" Text="目标半径 px" VerticalAlignment="Center" FontSize="12.5" Margin="0,3"/>
+                                <TextBox x:Name="TxtDrillRadius" Grid.Row="2" Grid.Column="1" Text="22" MinHeight="28" VerticalAlignment="Center" Margin="6,3,0,3"/>
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button x:Name="BtnDrill" Content="开始训练" Style="{StaticResource AccentButton}"
+                                        MinWidth="140" MinHeight="36" Click="OnStartDrill"/>
+                                <Button Content="保持当前分辨率" Margin="10,0,0,0" Click="OnStartDrillKeepMode"/>
+                            </StackPanel>
+
+                            <TextBlock x:Name="DrillSummary" Style="{StaticResource SubtleTextStyle}" Margin="0,10,0,0"
+                                       TextWrapping="Wrap" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="灵敏度校准" FontWeight="SemiBold" FontSize="14"/>
+                            <TextBlock x:Name="CalibInfo" Style="{StaticResource SubtleTextStyle}" Margin="0,6,0,0"
+                                       TextWrapping="Wrap"/>
+                            <Button Content="全屏转一圈（360°）" MinWidth="168" MinHeight="34" Margin="0,12,0,0"
+                                    HorizontalAlignment="Left" Click="OnCalibrate"/>
+                            <TextBlock Style="{StaticResource SubtleTextStyle}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="转盘由鼠标原始计数驱动，不经过 Windows 指针加速。转一圈看这段距离有多长，顺手也能反算灵敏度。"/>
+                        </StackPanel>
+                    </Border>
+
                     <Border Style="{StaticResource Card}" Margin="0,12,0,12">
                         <StackPanel>
                             <TextBlock Text="成绩历史" FontWeight="SemiBold" FontSize="14"/>
@@ -53,9 +105,9 @@
                                 </ListView.ItemContainerStyle>
                                 <ListView.View>
                                     <GridView>
-                                        <GridViewColumn Header="时间" Width="140" DisplayMemberBinding="{Binding Time}"/>
-                                        <GridViewColumn Header="点掉" Width="70" DisplayMemberBinding="{Binding Cleared}"/>
-                                        <GridViewColumn Header="命中率" Width="80" DisplayMemberBinding="{Binding HitRate}"/>
+                                        <GridViewColumn Header="时间" Width="130" DisplayMemberBinding="{Binding Time}"/>
+                                        <GridViewColumn Header="项目" Width="104" DisplayMemberBinding="{Binding Mode}"/>
+                                        <GridViewColumn Header="成绩" Width="190" DisplayMemberBinding="{Binding Score}"/>
                                     </GridView>
                                 </ListView.View>
                             </ListView>

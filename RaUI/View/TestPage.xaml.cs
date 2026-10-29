@@ -28,6 +28,9 @@ public partial class TestPage : UserControl
         TxtSeed.Text = pr.TestSeed.ToString(CultureInfo.InvariantCulture);
         SelectByTag(CmbMode, pr.TestMode.ToString());
         SelectBalls(pr.TestBalls);
+        SelectByTag(CmbDrill, pr.DrillKind.ToString());
+        TxtDrillSeconds.Text = pr.DrillSeconds.ToString(CultureInfo.InvariantCulture);
+        TxtDrillRadius.Text = pr.DrillRadiusPx.ToString("0.#", CultureInfo.InvariantCulture);
         TxtCrossArm.Text = pr.CrossArm.ToString("0.#", CultureInfo.InvariantCulture);
         TxtCrossGap.Text = pr.CrossGap.ToString("0.#", CultureInfo.InvariantCulture);
         ChkCrossDot.IsChecked = pr.CrossDot;
@@ -38,8 +41,11 @@ public partial class TestPage : UserControl
         {
             FillDevices();
             RefreshPlan();
+            RefreshCalib();
             FillRounds();
         };
+        TxtSens.TextChanged += (_, _) => RefreshCalib();
+        TxtDpi.TextChanged += (_, _) => RefreshCalib();
         TxtDistance.TextChanged += (_, _) => RefreshPlan();
         TxtRadius.TextChanged += (_, _) => RefreshPlan();
         CmbBalls.SelectionChanged += (_, _) => RefreshPlan();
@@ -221,6 +227,126 @@ public partial class TestPage : UserControl
         w.Activate();
     }
 
+    // ---------- drills ----------
+
+    int DrillIndex => int.TryParse((CmbDrill.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var v) ? v : 0;
+    int DrillSecondsValue => Math.Clamp(ParseI(TxtDrillSeconds.Text, 60), 10, 900);
+    double DrillRadiusValue => Math.Clamp(ParseD(TxtDrillRadius.Text, 22), 6, 120);
+    string DrillName => (CmbDrill.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "网格速击";
+
+    void OnStartDrill(object sender, RoutedEventArgs e) => StartDrill(true);
+    void OnStartDrillKeepMode(object sender, RoutedEventArgs e) => StartDrill(false);
+
+    void StartDrill(bool useCustomResolution)
+    {
+        RememberPrefs();
+        DrillSummary.Text = "";
+        DrillSummary.Visibility = Visibility.Collapsed;
+
+        frozen = null;
+        try { frozen = App.State.CaptureLiveCurve(DeviceId); }
+        catch (Exception e) { App.State.Status = "本轮起点没能读取：" + e.Message; }
+
+        var cfg = new DrillWindow.Config
+        {
+            Kind = (DrillKind)DrillIndex,
+            Seconds = DrillSecondsValue,
+            RadiusPx = DrillRadiusValue,
+            Resolution = useCustomResolution && AppState.Prefs.UseCustomFullscreenMode ? PlannedMode() : null,
+            CrossArm = CrossArm,
+            CrossGap = CrossGap,
+            CrossColor = CrossColor,
+            CrossDot = ChkCrossDot.IsChecked == true,
+        };
+
+        var w = new DrillWindow(cfg) { Owner = Window.GetWindow(this) };
+        w.SessionDone += r => Dispatcher.Invoke(() =>
+        {
+            string note = w.DisplayWarning.Length > 0 ? $"（{w.DisplayWarning}）" : "";
+            DrillSummary.Text = "本次：" + r.Score() + note;
+            DrillSummary.Visibility = Visibility.Visible;
+            WriteDrillHistory(r, w);
+            FillRounds();
+        });
+        w.Closed += (_, _) =>
+        {
+            try
+            {
+                if (!Display.Restore())
+                    App.State.Status = "分辨率还原失败，请到 Windows 显示设置手动改回。";
+                else if (w.DisplayWarning.Length > 0)
+                    App.State.Status = w.DisplayWarning;
+            }
+            catch (Exception e)
+            {
+                App.State.Status = "分辨率还原失败，请到 Windows 显示设置手动改回：" + e.Message;
+            }
+            RefreshPlan();
+            FillRounds();
+        };
+        w.Show();
+        w.Activate();
+    }
+
+    void WriteDrillHistory(DrillRun r, DrillWindow w)
+    {
+        try
+        {
+            ScoreHistory.Append(new RoundRow
+            {
+                When = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                Mode = DrillName,
+                Cleared = r.Hits,
+                Clicks = r.Shots,
+                SessionMs = r.ElapsedMs,
+                Balls = 0,
+                DistancePx = 0,
+                RadiusPx = DrillRadiusValue,
+                Direction = "",
+                Resolution = w.UsedResolution,
+                PlanName = frozen?.ProfileName ?? "",
+                ConfigSha = frozen?.ConfigSha ?? "",
+                Extra = r.ShortScore(),
+            });
+        }
+        catch (Exception e)
+        {
+            App.State.Status = "成绩没存下来：" + e.Message;
+        }
+    }
+
+    // ---------- calibration ----------
+
+    void OnCalibrate(object sender, RoutedEventArgs e)
+    {
+        RememberPrefs();
+        var cfg = new CalibrationWindow.Config
+        {
+            Sens = Sens,
+            Dpi = Dpi,
+            TargetCm360 = AppState.Prefs.TargetCm360,
+        };
+
+        var w = new CalibrationWindow(cfg) { Owner = Window.GetWindow(this) };
+        w.ShowDialog();
+
+        if (w.AppliedSens is { } sens)
+        {
+            TxtSens.Text = sens.ToString("0.####", CultureInfo.InvariantCulture);
+            App.State.Status = $"灵敏度改成 {sens:0.####}：{Dpi:0} DPI 下 360° 要 {SourceAim.CmPer360(sens, Dpi):0.0} cm";
+            RememberPrefs();
+        }
+        RefreshCalib();
+    }
+
+    void RefreshCalib()
+    {
+        double cm = SourceAim.CmPer360(Sens, Dpi);
+        CalibInfo.Text = cm > 0
+            ? $"现在这套设置（{Sens:0.###} @ {Dpi:0} DPI）= 转一圈 {cm:0.0} cm。觉得不顺手就进去转一圈，看着数字改。"
+            : "先在上面填好灵敏度和 DPI。";
+    }
+
     // ---------- score history ----------
 
     void WriteHistory()
@@ -253,8 +379,8 @@ public partial class TestPage : UserControl
     public sealed class ScoreRow
     {
         public string Time { get; init; } = "";
-        public int Cleared { get; init; }
-        public string HitRate { get; init; } = "";
+        public string Mode { get; init; } = "";
+        public string Score { get; init; } = "";
     }
 
     void FillRounds()
@@ -263,8 +389,8 @@ public partial class TestPage : UserControl
         {
             Time = DateTime.TryParse(r.When, out var when)
                 ? when.ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : r.When,
-            Cleared = r.Cleared,
-            HitRate = $"{r.HitRate:0}%",
+            Mode = r.Mode,
+            Score = r.Extra.Length > 0 ? r.Extra : $"{r.Cleared} 个 · 命中率 {r.HitRate:0}%",
         }).ToList();
     }
 
@@ -287,6 +413,9 @@ public partial class TestPage : UserControl
         pr.CrossGap = CrossGap;
         pr.CrossColor = CrossColor;
         pr.CrossDot = ChkCrossDot.IsChecked == true;
+        pr.DrillKind = DrillIndex;
+        pr.DrillSeconds = DrillSecondsValue;
+        pr.DrillRadiusPx = DrillRadiusValue;
         AppState.SavePrefs();
     }
 

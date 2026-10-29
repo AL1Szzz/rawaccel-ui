@@ -1,0 +1,33 @@
+<Window x:Class="RaUI.View.DrillWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Aim drill"
+        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False"
+        Topmost="True" Cursor="None"
+        Background="#FF121212" KeyDown="OnKeyDown" Closed="OnClosed"
+        MouseMove="OnPointerMove" MouseDown="OnMouseDown" MouseUp="OnMouseUp">
+    <Grid>
+        <Canvas x:Name="Surface" Background="Transparent"/>
+
+        <!-- crosshair drawn at the real pointer hotspot; the system cursor is hidden -->
+        <Canvas x:Name="CrossLayer" IsHitTestVisible="False">
+            <Canvas x:Name="Cross" Width="0" Height="0">
+                <Rectangle x:Name="CArmL" Height="2" RadiusX="1" RadiusY="1"/>
+                <Rectangle x:Name="CArmR" Height="2" RadiusX="1" RadiusY="1"/>
+                <Rectangle x:Name="CArmT" Width="2" RadiusX="1" RadiusY="1"/>
+                <Rectangle x:Name="CArmB" Width="2" RadiusX="1" RadiusY="1"/>
+                <Rectangle x:Name="CDot" Width="2" Height="2" RadiusX="1" RadiusY="1"/>
+            </Canvas>
+        </Canvas>
+
+        <Border Background="#B0000000" CornerRadius="4" Padding="12,6" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0">
+            <TextBlock x:Name="BannerText" Text="" Foreground="#FFFFFFFF" FontSize="13"/>
+        </Border>
+
+        <Border Background="#99000000" CornerRadius="4" Padding="12,5" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,18">
+            <TextBlock x:Name="HintText" Text="" Foreground="#B3FFFFFF" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>
